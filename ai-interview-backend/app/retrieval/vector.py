@@ -1,10 +1,10 @@
-"""Vector recall — wraps existing Milvus collection search"""
+"""Vector recall — wraps pgvector collection search (knowledge_chunks / question_bank)."""
 from __future__ import annotations
 
 import logging
 from typing import Optional
 
-from pymilvus import MilvusClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.llm.embedding import embed_text
 from app.retrieval import SearchResult
@@ -20,16 +20,16 @@ _COLLECTION_MAP = {
 
 
 async def vector_search(
-    client: MilvusClient,
+    session: AsyncSession,
     query: str,
     collection: str,
     top_k: int = 20,
     filters: Optional[dict] = None,
 ) -> list[SearchResult]:
-    """Run vector similarity search against a Milvus collection.
+    """Run vector similarity search against a pgvector-backed collection.
 
     Args:
-        client: MilvusClient instance.
+        session: Async SQLAlchemy session bound to the pgvector-enabled database.
         query: Raw text to embed and search.
         collection: "knowledge_chunks" or "question_bank".
         top_k: Number of results to return.
@@ -55,16 +55,16 @@ async def vector_search(
 
     try:
         if collection == "knowledge_chunks":
-            raw = coll.search(
-                client=client,
+            raw = await coll.search(
+                session=session,
                 query_vector=query_vec,
                 top_k=top_k,
                 document_ids=filters.get("document_ids"),
                 min_score=filters.get("min_score", 0.0),
             )
         else:
-            raw = coll.search(
-                client=client,
+            raw = await coll.search(
+                session=session,
                 query_vector=query_vec,
                 top_k=top_k,
                 position_tag=filters.get("position_tag"),

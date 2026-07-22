@@ -1,8 +1,8 @@
-"""知识库服务（Milvus 版）
+"""知识库服务（pgvector 版）
 
-业务元数据存 PostgreSQL，embedding 存 Milvus。
-- 写路径：PG 拿 ID → Milvus 写同 id；失败回滚 PG
-- 读路径：直接调 Milvus，不需要 PG 事务
+业务元数据与 embedding 均存 PostgreSQL。
+- 写路径：PG 拿 ID → 写回 embedding；失败回滚 PG
+- 读路径：直接走 pgvector L2 检索
 """
 from __future__ import annotations
 
@@ -16,9 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.knowledge import KnowledgeChunk, KnowledgeDocument
 from app.llm.embedding import embed_text, embed_texts
-from app.vector_db import get_milvus_client
 from app.vector_db.collections import knowledge as knowledge_vdb
-from app.vector_db.collections.knowledge import KnowledgeChunkPayload
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +55,7 @@ def _hash_content(text: str) -> str:
 
 
 class KnowledgeService:
-    """知识库服务，提供文档摄入、切分配置、向量化写入（PG + Milvus 双写）和语义检索功能。"""
+    """知识库服务，提供文档摄入、切分配置、向量化写入（PG + pgvector 同表）和语义检索功能。"""
 
     async def ingest_document(
         self,
@@ -67,9 +65,9 @@ class KnowledgeService:
         db: AsyncSession,
     ) -> int:
         """
-        摄入文档：提取文本 → 切分 → 批量向量化 → 写 PG + Milvus
+        摄入文档：提取文本 → 切分 → 批量向量化 → 写 PG（含 embedding）
 
-        写策略：先 PG 拿 auto-increment id，再 Milvus 同 id 写；
+        写策略：先 PG 拿 auto-increment id，再写回 embedding；
                 任一失败则回滚 PG（删已 insert 的 chunks）。
         """
         # 1. 标记 indexing
@@ -79,8 +77,6 @@ class KnowledgeService:
             .values(status="indexing")
         )
         await db.commit()
-
-        milvus_client = get_milvus_client()
 
         try:
             # 2. 提取 + 切分
@@ -109,19 +105,12 @@ class KnowledgeService:
             # 4. 向量化
             embeddings = await embed_texts(chunks)
 
-            # 5. Milvus：同 id 写
-            payloads = [
-                KnowledgeChunkPayload(
-                    id=cid,
-                    document_id=doc_id,
-                    chunk_index=i,
-                    content=text,
-                    content_hash=_hash_content(text),
-                    embedding=emb,
-                )
-                for i, (cid, text, emb) in enumerate(zip(chunk_ids, chunks, embeddings))
+            # 5. pgvector：同 id 写回 embedding
+            items = [
+                {"id": cid, "embedding": emb}
+                for cid, emb in zip(chunk_ids, embeddings)
             ]
-            knowledge_vdb.insert_chunks(milvus_client, payloads)
+            await knowledge_vdb.insert_chunks(db, items)
 
             # 6. 标记 indexed
             await db.execute(
@@ -165,18 +154,17 @@ class KnowledgeService:
             return await self.ingest_document(doc_id, file_bytes, file_type, db)
 
     async def delete_document(self, doc_id: int, db: AsyncSession) -> None:
-        """删除文档及其所有 chunk（双删：先 Milvus 后 PG）。
+        """删除文档及其所有 chunk（PG：清空 embedding + 删行）。
 
         Args:
             doc_id: 文档 ID。
             db: 数据库会话。
         """
-        # 先 Milvus（如果失败，至少 PG 还能查出来）
+        # 先清空 embedding（如果失败，至少 PG 还能查出来）
         try:
-            milvus_client = get_milvus_client()
-            knowledge_vdb.delete_by_document(milvus_client, doc_id)
+            await knowledge_vdb.delete_by_document(db, doc_id)
         except Exception as e:
-            logger.warning(f"Milvus 删除 document_id={doc_id} 失败（继续删 PG）: {e}")
+            logger.warning(f"pgvector 删除 document_id={doc_id} 失败（继续删 PG 行）: {e}")
 
         # 再 PG（CASCADE 已自动删 chunks）
         await db.execute(
@@ -202,12 +190,11 @@ class KnowledgeService:
         Returns:
             重新索引后生成的 chunk 数量。
         """
-        milvus_client = get_milvus_client()
-        # 双删
+        # 清空旧 embedding
         try:
-            knowledge_vdb.delete_by_document(milvus_client, doc_id)
+            await knowledge_vdb.delete_by_document(db, doc_id)
         except Exception as e:
-            logger.warning(f"Milvus reindex 旧数据删除失败: {e}")
+            logger.warning(f"pgvector reindex 旧 embedding 清空失败: {e}")
         await db.execute(
             delete(KnowledgeChunk).where(KnowledgeChunk.document_id == doc_id)
         )
@@ -217,23 +204,24 @@ class KnowledgeService:
     async def retrieve_chunks(
         self,
         query: str,
-        db: AsyncSession = None,  # noqa 保留参数仅为向后兼容（不再用）
+        db: AsyncSession = None,  # noqa 保留参数仅为向后兼容
         k: int = 4,
-        category: Optional[str] = None,  # noqa 当前未在 Milvus 端过滤，留作接口兼容
+        category: Optional[str] = None,  # noqa 当前未在 pgvector 端过滤，留作接口兼容
         min_score: float = 0.3,
     ) -> List[Dict[str, Any]]:
         """
-        语义检索文档 chunk（走 Milvus）
+        语义检索文档 chunk（走 pgvector）
 
         返回列表：[{id, document_id, chunk_index, content, content_hash, metadata, similarity}, ...]
         """
+        if db is None:
+            raise ValueError("retrieve_chunks requires a non-None db session")
         query_vec = await embed_text(query)
-        milvus_client = get_milvus_client()
-        return knowledge_vdb.search(
-            milvus_client,
+        return await knowledge_vdb.search(
+            db,
             query_vec,
             top_k=k,
-            document_ids=None,  # category 过滤后续接入 Milvus 端 metadata 查询
+            document_ids=None,  # category 过滤后续接入 pgvector 端 metadata 查询
             min_score=min_score,
         )
 

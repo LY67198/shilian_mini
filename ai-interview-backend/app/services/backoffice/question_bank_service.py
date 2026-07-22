@@ -1,8 +1,8 @@
-"""题库服务（Milvus 版）
+"""题库服务（pgvector 版）
 
-业务字段在 PostgreSQL，embedding 在 Milvus。
-- 写策略：PG insert → 拿 auto-increment id → Milvus 同 id 写入；失败回滚 PG
-- 读策略：直接调 Milvus search，绕过 PG
+业务字段与 embedding 均存 PostgreSQL。
+- 写策略：PG insert → 拿 auto-increment id → 写回 embedding；失败回滚 PG
+- 读策略：直接调 pgvector search
 """
 from __future__ import annotations
 
@@ -14,9 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.question_bank import QuestionBank
 from app.llm.embedding import embed_text, embed_texts
-from app.vector_db import get_milvus_client
 from app.vector_db.collections import question_bank as question_vdb
-from app.vector_db.collections.question_bank import QuestionPayload
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +28,12 @@ def _build_embedding_text(question: str, reference_answer: Optional[str]) -> str
 
 
 class QuestionBankService:
-    """题库服务，提供题目的 CRUD、向量化、批量索引重建和语义检索功能（PG + Milvus 双写）。"""
+    """题库服务，提供题目的 CRUD、向量化、批量索引重建和语义检索功能（PG + pgvector 同表）。"""
 
     # ── CRUD ────────────────────────────────────────────────────────────
 
     async def create(self, db: AsyncSession, data: dict) -> QuestionBank:
-        """新增题目：PG 拿 id → Milvus 写 embedding；Milvus 失败回滚 PG"""
+        """新增题目：PG 拿 id → 写回 embedding；embedding 失败回滚 PG"""
         emb_text = _build_embedding_text(data["question"], data.get("reference_answer"))
 
         # 1. PG insert（先不 embed，拿到 id 再 embed，避免无效 embedding 浪费）
@@ -55,30 +53,16 @@ class QuestionBankService:
         await db.commit()
         await db.refresh(q)
 
-        # 2. Embed + Milvus insert
+        # 2. Embed + pgvector 写回
         try:
             embedding = await embed_text(emb_text)
-            client = get_milvus_client()
-            question_vdb.insert_questions(client, [
-                QuestionPayload(
-                    id=q.id,
-                    category=q.category,
-                    position_tag=q.position_tag,
-                    difficulty=q.difficulty,
-                    question=q.question,
-                    reference_answer=q.reference_answer,
-                    key_points=q.key_points,
-                    tags=q.tags,
-                    embedding_text=emb_text,
-                    embedding=embedding,
-                )
-            ])
-            logger.info(f"题目 {q.id} 已创建并向量化（PG + Milvus）")
+            await question_vdb.insert_questions(db, [{"id": q.id, "embedding": embedding}])
+            logger.info(f"题目 {q.id} 已创建并向量化（PG + pgvector）")
         except Exception as e:
-            # Milvus 失败 → 回滚 PG
+            # embedding 失败 → 回滚 PG
             await db.delete(q)
             await db.commit()
-            logger.error(f"题目创建 Milvus 失败，已回滚 PG: {e}")
+            logger.error(f"题目创建 embedding 失败，已回滚 PG: {e}")
             raise
         return q
 
@@ -95,7 +79,7 @@ class QuestionBankService:
         return await db.get(QuestionBank, question_id)
 
     async def update(self, db: AsyncSession, question_id: int, data: dict) -> Optional[QuestionBank]:
-        """更新题目；若改题面/答案则重新向量化（同步写 PG + Milvus）"""
+        """更新题目；若改题面/答案则重新向量化（同步写 PG + pgvector）"""
         q = await db.get(QuestionBank, question_id)
         if not q:
             return None
@@ -116,35 +100,19 @@ class QuestionBankService:
             emb_text = _build_embedding_text(q.question, q.reference_answer)
             q.embedding_text = emb_text
             await db.commit()
-            # Milvus：delete + reinsert（同 id）
-            client = get_milvus_client()
-            question_vdb.delete_question(client, q.id)
+            # pgvector：清空 + 重写（同 id）
+            await question_vdb.delete_question(db, q.id)
             embedding = await embed_text(emb_text)
-            question_vdb.insert_questions(client, [
-                QuestionPayload(
-                    id=q.id,
-                    category=q.category,
-                    position_tag=q.position_tag,
-                    difficulty=q.difficulty,
-                    question=q.question,
-                    reference_answer=q.reference_answer,
-                    key_points=q.key_points,
-                    tags=q.tags,
-                    embedding_text=emb_text,
-                    embedding=embedding,
-                )
-            ])
+            await question_vdb.insert_questions(db, [{"id": q.id, "embedding": embedding}])
             logger.info(f"题目 {q.id} 已更新并重新向量化")
         return q
 
     async def delete(self, db: AsyncSession, question_id: int) -> bool:
-        """删除：Milvus + PG 双删"""
-        # 先 Milvus（避免 PG 删了但 Milvus 还有）
+        """删除：先清空 embedding 再删 PG 行"""
         try:
-            client = get_milvus_client()
-            question_vdb.delete_question(client, question_id)
+            await question_vdb.delete_question(db, question_id)
         except Exception as e:
-            logger.warning(f"Milvus 删除 question_id={question_id} 失败（继续删 PG）: {e}")
+            logger.warning(f"pgvector 删除 question_id={question_id} 失败（继续删 PG 行）: {e}")
 
         result = await db.execute(
             delete(QuestionBank).where(QuestionBank.id == question_id)
@@ -153,7 +121,7 @@ class QuestionBankService:
         return result.rowcount > 0
 
     async def toggle(self, db: AsyncSession, question_id: int, is_active: bool) -> bool:
-        """启用/禁用（PG only，Milvus 端按 is_active 过滤由调用方决定）"""
+        """启用/禁用（PG only，pgvector 端按 is_active 过滤由调用方决定）"""
         result = await db.execute(
             update(QuestionBank)
             .where(QuestionBank.id == question_id)
@@ -200,7 +168,7 @@ class QuestionBankService:
     # ── 向量化 ──────────────────────────────────────────────────────────
 
     async def embed_question(self, db: AsyncSession, question_id: int) -> bool:
-        """单题重新向量化：更新 PG embedding_text 并重新写入 Milvus 向量。
+        """单题重新向量化：更新 PG embedding_text 并重新写入 pgvector 向量。
 
         Args:
             db: 数据库会话。
@@ -217,22 +185,8 @@ class QuestionBankService:
         await db.commit()
 
         embedding = await embed_text(emb_text)
-        client = get_milvus_client()
-        question_vdb.delete_question(client, q.id)
-        question_vdb.insert_questions(client, [
-            QuestionPayload(
-                id=q.id,
-                category=q.category,
-                position_tag=q.position_tag,
-                difficulty=q.difficulty,
-                question=q.question,
-                reference_answer=q.reference_answer,
-                key_points=q.key_points,
-                tags=q.tags,
-                embedding_text=emb_text,
-                embedding=embedding,
-            )
-        ])
+        await question_vdb.delete_question(db, q.id)
+        await question_vdb.insert_questions(db, [{"id": q.id, "embedding": embedding}])
         return True
 
     def batch_embed_sync(self, question_ids: List[int]) -> dict:
@@ -253,24 +207,12 @@ class QuestionBankService:
                     q.embedding_text = txt
                 await db.commit()
 
-                # Milvus 批量写入
-                client = get_milvus_client()
-                payloads = [
-                    QuestionPayload(
-                        id=q.id,
-                        category=q.category,
-                        position_tag=q.position_tag,
-                        difficulty=q.difficulty,
-                        question=q.question,
-                        reference_answer=q.reference_answer,
-                        key_points=q.key_points,
-                        tags=q.tags,
-                        embedding_text=txt,
-                        embedding=emb,
-                    )
-                    for q, txt, emb in zip(rows, texts, embeddings)
+                # pgvector 批量写回 embedding
+                items = [
+                    {"id": q.id, "embedding": emb}
+                    for q, emb in zip(rows, embeddings)
                 ]
-                question_vdb.insert_questions(client, payloads)
+                await question_vdb.insert_questions(db, items)
                 return len(rows)
 
         count = asyncio.run(_run())
@@ -310,17 +252,18 @@ class QuestionBankService:
     async def retrieve_questions(
         self,
         query: str,
-        db: AsyncSession = None,  # noqa 保留参数仅为向后兼容（不再用）
+        db: AsyncSession = None,  # noqa 保留参数仅为向后兼容
         k: int = 20,
         position_tag: Optional[str] = None,
         difficulty: Optional[str] = None,
         min_score: float = 0.7,
     ) -> list[dict]:
-        """语义检索（Milvus 端执行，支持 position_tag / difficulty 过滤）"""
+        """语义检索（pgvector 端执行，支持 position_tag / difficulty 过滤）"""
+        if db is None:
+            raise ValueError("retrieve_questions requires a non-None db session")
         query_vec = await embed_text(query)
-        client = get_milvus_client()
-        return question_vdb.search(
-            client,
+        return await question_vdb.search(
+            db,
             query_vec,
             top_k=k,
             position_tag=position_tag,
@@ -340,7 +283,7 @@ class QuestionBankService:
         await db.commit()
 
     async def get_stats(self, db: AsyncSession) -> dict:
-        """题库统计（PG only — Milvus 端所有有效记录都有 embedding）"""
+        """题库统计（PG only — pgvector 端所有有效记录都有 embedding）"""
         by_category = (
             await db.execute(
                 select(QuestionBank.category, func.count().label("cnt"))
@@ -364,7 +307,7 @@ class QuestionBankService:
 
         return {
             "total": total,
-            # 注：所有有效记录都在 Milvus 端，不再单独统计 embedded
+            # 注：所有有效记录都有 embedding，不再单独统计
             "embedded": total,
             "by_category": {row[0]: row[1] for row in by_category},
             "by_difficulty": {row[0]: row[1] for row in by_difficulty},

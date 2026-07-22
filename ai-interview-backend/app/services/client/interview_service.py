@@ -68,18 +68,16 @@ class InterviewService:
         """
         from app.retrieval.bm25_lifecycle import get_question_bank_bm25
         from app.retrieval.pipeline import RetrievalPipeline
-        from app.vector_db import get_milvus_client
 
         query = _build_retrieval_query(target_position, parsed_resume)
         recall_k = total_questions * settings.QUESTION_BANK_RECALL_FACTOR
 
         try:
             bm25_index = get_question_bank_bm25()
-            milvus_client = get_milvus_client()
 
-            if bm25_index and milvus_client:
+            if bm25_index:
                 pipeline = RetrievalPipeline(
-                    client=milvus_client,
+                    session=db,
                     collection="question_bank",
                     bm25_index=bm25_index,
                     vector_top_k=settings.VECTOR_TOP_K,
@@ -132,7 +130,7 @@ class InterviewService:
                                 "source": "from_bank",
                             })
             else:
-                # Fallback: BM25 not available, use old vector-only path
+                # Fallback: BM25 not available, use pgvector-only path
                 candidates = await question_bank_service.retrieve_questions(
                     query=query,
                     db=db,

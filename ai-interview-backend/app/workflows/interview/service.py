@@ -13,7 +13,6 @@ from app.core.config import settings
 from app.models.interview_message import InterviewMessage
 from app.retrieval.bm25_lifecycle import get_knowledge_bm25
 from app.retrieval.pipeline import RetrievalPipeline
-from app.vector_db import get_milvus_client
 from app.workflows._shared.sse import astream_to_sse
 from app.workflows.interview.graph import get_compiled_graph
 from app.workflows.retrieval_check.service import RetrievalCheckService
@@ -51,7 +50,6 @@ async def submit_answer(
     await db.commit()
 
     graph = await get_compiled_graph()
-    milvus_client = get_milvus_client()
     checkpointer = graph.checkpointer
 
     # Determine if this is the first call BEFORE building config
@@ -65,11 +63,11 @@ async def submit_answer(
         "configurable": {
             "thread_id": f"interview-{interview_id}",
             "db": db,
-            "milvus_client": milvus_client,
+            "session": db,
             "evaluator_agent": EvaluatorAgent(),
             "report_agent": ReportAgent(),
             "retrieval_check_service": _build_retrieval_check_service(
-                milvus_client, is_first_call
+                db, is_first_call
             ),
         },
     }
@@ -131,7 +129,7 @@ def _extract_response(state: dict) -> dict:
     return response
 
 
-def _build_retrieval_check_service(milvus_client, is_first_call: bool):
+def _build_retrieval_check_service(session: AsyncSession, is_first_call: bool):
     """Wire up RetrievalCheckService for hybrid RAG (Phase 3).
 
     Only builds the service on the first call to avoid re-initializing
@@ -141,11 +139,11 @@ def _build_retrieval_check_service(milvus_client, is_first_call: bool):
         return None
 
     knowledge_bm25 = get_knowledge_bm25()
-    if not knowledge_bm25 or not milvus_client:
+    if not knowledge_bm25:
         return None
 
     knowledge_pipeline = RetrievalPipeline(
-        client=milvus_client,
+        session=session,
         collection="knowledge_chunks",
         bm25_index=knowledge_bm25,
         vector_top_k=settings.VECTOR_TOP_K,

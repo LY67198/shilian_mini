@@ -5,7 +5,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from pymilvus import MilvusClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.retrieval import SearchResult
@@ -23,13 +23,13 @@ class RetrievalPipeline:
 
     Usage::
 
-        pipeline = RetrievalPipeline(client, "knowledge_chunks", bm25_index)
+        pipeline = RetrievalPipeline(session, "knowledge_chunks", bm25_index)
         results = await pipeline.search("query text")
     """
 
     def __init__(
         self,
-        client: MilvusClient,
+        session: AsyncSession,
         collection: str,
         bm25_index: BM25Index,
         vector_top_k: int = 20,
@@ -40,15 +40,15 @@ class RetrievalPipeline:
         """初始化混合检索管线。
 
         Args:
-            client: MilvusClient 实例，用于向量检索。
-            collection: Milvus collection 名称（"knowledge_chunks" 或 "question_bank"）。
+            session: Async SQLAlchemy session，pgvector 向量检索入口。
+            collection: collection 名称（"knowledge_chunks" 或 "question_bank"）。
             bm25_index: BM25 关键词索引实例。
             vector_top_k: 向量检索召回数量。
             bm25_top_k: BM25 检索召回数量。
             final_top_k: 融合后最终返回的结果数量。
             enable_rerank: 是否启用重排序。
         """
-        self._client = client
+        self._session = session
         self._collection = collection
         self._bm25 = bm25_index
         self._vector_top_k = vector_top_k
@@ -68,10 +68,10 @@ class RetrievalPipeline:
         Returns:
             Ranked list of SearchResult (length <= final_top_k).
         """
-        # 1. Vector recall (Milvus HNSW)
+        # 1. Vector recall (pgvector L2)
         with trace_span("vector_recall", {"query": query, "top_k": self._vector_top_k}) as span:
             vector_results = await vector_search(
-                client=self._client,
+                session=self._session,
                 query=query,
                 collection=self._collection,
                 top_k=self._vector_top_k,
