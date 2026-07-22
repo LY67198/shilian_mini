@@ -12,6 +12,7 @@
 
 from sqlalchemy import Column, Integer, String, Text, Boolean, BigInteger, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
+from pgvector.sqlalchemy import Vector
 from .base import BaseModel
 
 
@@ -43,4 +44,4 @@ class KnowledgeChunk(BaseModel):
     content = Column(Text, nullable=False)
     content_hash = Column(String(64), nullable=True)
     metadata_ = Column("metadata", JSONB, nullable=True)   # 页码、位置等
-    # embedding 列已迁移到 Milvus collection "knowledge_chunks"
+    embedding = Column(Vector(1024), nullable=True)        # pgvector 向量列（DashScope 1024 维，已归一化）
