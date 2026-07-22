@@ -1,0 +1,170 @@
+"""应用配置 — 基于环境变量的统一 Settings（Pydantic BaseSettings）
+
+按段组织：
+- 环境配置（ENV / 项目基础信息 / CORS / Docker 端口）
+- 数据库配置（PostgreSQL）
+- Redis 配置
+- Milvus 向量数据库配置
+- Celery 配置（broker / result backend）
+- HTTP 代理配置（仅测试环境使用）
+- 邮件 / Brevo 配置
+- JWT 配置 + 登录限流
+- S3 / AWS 配置
+- AI 模型配置（OpenAI / DeepSeek）
+- RAG 知识库 / Embedding 配置（DashScope + 文档切分 + 检索阈值）
+- Hybrid Retrieval（BM25 / RRF / Rerank / Self-check）
+"""
+
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    """全局应用配置：从 .env 文件读取，支持环境变量覆盖。
+
+    实例化时（__init__）根据 Redis 配置自动拼接 CELERY_BROKER_URL
+    与 CELERY_RESULT_BACKEND，供 app.core.celery_app 直接读取。
+    """
+    # 环境配置
+    ENV: str = "development"  # 默认值为 "development"
+
+    # 基础配置
+    PROJECT_NAME: str = "Shilian-MockPilot"
+    API_V1_STR: str = "/api/v1"
+    API_PORT: int = 8001
+    FRONTEND_URL: str = "http://localhost:3000"
+
+    # CORS 允许的来源（逗号分隔，生产环境必须配置具体域名）
+    CORS_ORIGINS: str = ""
+
+    # Docker 端口配置（可选，用于 docker-compose）
+    REDIS_EXTERNAL_PORT: int = 6386
+    NGINX_HTTP_PORT: int = 8086
+    NGINX_HTTPS_PORT: int = 8446
+    FLOWER_PORT: int = 5556
+
+    # 数据库配置
+    POSTGRES_USER: str = "demo"
+    POSTGRES_PASSWORD: str = "demo123"
+    POSTGRES_HOST: str = "postgres"
+    POSTGRES_PORT: int = 5432
+    POSTGRES_DB: str = "ai_interview"
+
+    # Redis 配置
+    REDIS_HOST: str = "redis"
+    REDIS_PORT: int = 6379
+    REDIS_PASSWORD: str = ""
+
+    # Milvus 向量数据库配置
+    # 容器内默认 host="milvus"，宿主开发时改为 "localhost"
+    MILVUS_HOST: str = "milvus"
+    MILVUS_PORT: int = 19530
+    MILVUS_USER: str = ""
+    MILVUS_PASSWORD: str = ""
+    MILVUS_DB_NAME: str = "default"
+    # Collection 名称（未来改 schema 不影响 Postgres）
+    MILVUS_COLLECTION_KNOWLEDGE: str = "knowledge_chunks"
+    MILVUS_COLLECTION_QUESTION_BANK: str = "question_bank"
+
+    # Celery 配置
+    CELERY_BROKER_URL: str = ""  # 在 __init__ 中设置
+    CELERY_RESULT_BACKEND: str = ""  # 在 __init__ 中设置
+
+    # HTTP 代理配置 - 仅在测试环境使用
+    USE_HTTP_PROXY: bool = False  # 默认不使用代理
+    HTTP_PROXY: str = "http://127.0.0.1:7890"
+    HTTPS_PROXY: str = "http://127.0.0.1:7890"
+
+    # 邮件配置
+    MAIL_MAILER: str = "smtp"
+    MAIL_HOST: str = "localhost"
+    MAIL_PORT: int = 1025
+    MAIL_USERNAME: str = "user"
+    MAIL_PASSWORD: str = "password"
+    MAIL_FROM_ADDRESS: str = "noreply@example.com"
+    MAIL_FROM_NAME: str = "Seiki"
+    MAIL_ENCRYPTION: str = "none"
+
+    # Brevo 配置
+    BREVO_API_KEY: str = "dummy-api-key"
+    BREVO_EMAIL_FROM: str = "noreply@example.com"
+    BREVO_EMAIL_FROM_NAME: str = "Seiki"
+
+    # 管理员邮箱
+    ADMIN_EMAIL: str = "admin@example.com"
+
+    # JWT 配置
+    SECRET_KEY: str = "your-secret-key-change-in-production"
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # 登录限流（基于 Redis，防止暴力破解）
+    LOGIN_RATE_LIMIT_MAX_ATTEMPTS: int = 5
+    LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = 300  # 5 分钟内最多 5 次
+
+    # S3 配置
+    AWS_ACCESS_KEY_ID: str = "your-access-key"
+    AWS_SECRET_ACCESS_KEY: str = "your-secret-key"
+    AWS_REGION: str = "us-east-1"
+    AWS_BUCKET_NAME: str = "your-bucket-name"
+    AWS_ENDPOINT: str = "https://s3.amazonaws.com"
+
+    # OpenAI 配置
+    OPENAI_API_KEY: str = "your-openai-api-key"
+
+    # DeepSeek 配置
+    DEEPSEEK_API_KEY: str = "your-deepseek-api-key"
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+    DEEPSEEK_MODEL: str = "deepseek-chat"
+
+    # ============= RAG 知识库 / Embedding 配置 =============
+    # 阿里云 DashScope（用于 Embedding 服务）
+    DASHSCOPE_API_KEY: str = "sk-your-dashscope-key"
+
+    # Embedding 模型
+    KNOWLEDGE_EMBEDDING_MODEL: str = "text-embedding-v3"
+    KNOWLEDGE_EMBEDDING_DIM: int = 1024
+
+    # 文档切分参数
+    KNOWLEDGE_CHUNK_SIZE: int = 500
+    KNOWLEDGE_CHUNK_OVERLAP: int = 50
+
+    # 文档检索参数（用于答案评分、用户答疑）
+    KNOWLEDGE_TOP_K: int = 4
+    KNOWLEDGE_MIN_SCORE: float = 0.3
+
+    # 知识库 RAG 是否注入评分 Prompt（向后兼容：关闭时退化为仅参考答案评分）
+    KNOWLEDGE_SCORING_ENABLED: bool = True
+
+    # 题库召回参数（用于面试出题，核心）
+    QUESTION_BANK_MIN_SCORE: float = 0.7
+    QUESTION_BANK_RECALL_FACTOR: int = 2
+    QUESTION_BANK_TOP_K: int = 20
+
+    # ============= Phase 3: Hybrid Retrieval =============
+    DASHSCOPE_RERANK_MODEL: str = "gte-rerank"
+    RRF_K: int = 60
+    BM25_TOP_K: int = 20
+    VECTOR_TOP_K: int = 20
+    RERANK_TOP_K: int = 10
+    SELF_CHECK_MAX_RETRIES: int = 2
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"  # 可选，指定编码
+
+    def __init__(self, **kwargs):
+        """初始化后处理：根据 Redis 配置拼 Celery URL（避免 .env 重复声明）"""
+        super().__init__(**kwargs)
+        # 在所有属性从 env 加载后设置 Celery URL
+        if self.REDIS_PASSWORD:
+            redis_url = (
+                f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/0"
+            )
+        else:
+            redis_url = f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/0"
+        self.CELERY_BROKER_URL = redis_url
+        self.CELERY_RESULT_BACKEND = redis_url
+
+
+settings = Settings()

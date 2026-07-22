@@ -1,0 +1,10 @@
+{
+  "date": "2026-07-11T10:01:16.497555",
+  "golden_set_version": "1.0",
+  "num_samples": 10,
+  "metrics": {
+    "faithfulness": 0.5479,
+    "context_precision": 0.3,
+    "context_recall": 0.3
+  }
+}
