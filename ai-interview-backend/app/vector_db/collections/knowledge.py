@@ -1,200 +1,95 @@
-"""knowledge_chunks collection schema + CRUD
+"""knowledge_chunks 向量检索（pgvector 实现）
 
-字段设计原则：
-- `id` 与 PostgreSQL `knowledge_chunks.id` 同源（auto-increment 同步）
-- `embedding` 与 `KNOWLEDGE_EMBEDDING_DIM` 绑定（默认 1024）
-- 其他元数据冗余存 Milvus 便于按 `document_id` / `chunk_index` 过滤
+embedding 存 Postgres 的 vector 列，与业务元数据同表 co-location。
+- id 即 knowledge_chunks.id
+- 距离度量 L2（<-> 运算符），DashScope 归一化向量下等价 cosine
 """
 from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
 
-from pymilvus import MilvusClient, CollectionSchema, FieldSchema, DataType
-from pydantic import BaseModel, Field
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.vector_db.index import (
-    DEFAULT_SEARCH_PARAMS,
-    EMBEDDING_FIELD,
-    PK_FIELD,
-    ensure_index,
-    l2_distance_to_similarity,
-)
+from app.models.knowledge import KnowledgeChunk
+from app.vector_db.index import l2_distance_to_similarity
 
 logger = logging.getLogger(__name__)
 
-COLLECTION_NAME = settings.MILVUS_COLLECTION_KNOWLEDGE  # "knowledge_chunks"
 
-
-def get_schema(dim: int) -> CollectionSchema:
-    """Collection schema 定义（pymilvus 2.4+ CollectionSchema 对象）"""
-    fields = [
-        FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=False),
-        FieldSchema(name="document_id", dtype=DataType.INT64),
-        FieldSchema(name="chunk_index", dtype=DataType.INT64),
-        FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=8192),
-        FieldSchema(name="content_hash", dtype=DataType.VARCHAR, max_length=64),
-        FieldSchema(name="metadata", dtype=DataType.JSON),
-        FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
-    ]
-    return CollectionSchema(
-        fields=fields,
-        description="Knowledge base document chunks with embeddings",
-        enable_dynamic_field=False,
+async def upsert_embedding(session: AsyncSession, chunk_id: int, embedding: List[float]) -> None:
+    """把 embedding 写回已存在的 knowledge_chunks 行。"""
+    await session.execute(
+        update(KnowledgeChunk).where(KnowledgeChunk.id == chunk_id).values(embedding=embedding)
     )
+    await session.commit()
 
 
-class KnowledgeChunkPayload(BaseModel):
-    """插入 / 检索时的数据载荷"""
-    id: int = Field(..., description="Postgres knowledge_chunks.id")
-    document_id: int
-    chunk_index: int
-    content: str
-    content_hash: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
-    embedding: List[float]
-
-
-def create_collection(client: MilvusClient, dim: int) -> None:
-    """创建 collection + 索引（已存在跳过）"""
-    if client.has_collection(COLLECTION_NAME):
-        logger.info(f"Collection 已存在: {COLLECTION_NAME}")
-        ensure_index(client, COLLECTION_NAME)
-        try:
-            client.load_collection(COLLECTION_NAME)
-        except Exception:
-            pass  # 已加载会报错，幂等
-        return
-    client.create_collection(
-        collection_name=COLLECTION_NAME,
-        schema=get_schema(dim),
-        shards_num=2,
-    )
-    logger.info(f"Collection 已创建: {COLLECTION_NAME}")
-    ensure_index(client, COLLECTION_NAME)
-    client.load_collection(COLLECTION_NAME)
-    logger.info(f"Collection 已加载到内存: {COLLECTION_NAME}")
-
-
-def insert_chunks(client: MilvusClient, chunks: List[KnowledgeChunkPayload]) -> List[int]:
-    """批量插入 chunks，返回 ids
-
-    注意：Milvus 默认 insert 后数据在写缓冲，必须 flush() 才能被 search 命中。
-    为简化调用方，每次 insert 后自动 flush（吞吐低但语义清晰）。
-    生产高吞吐场景可改为批量 insert + 定时 flush。
-
-    Args:
-        client: Milvus 客户端实例。
-        chunks: 待插入的 chunk 载荷列表（KnowledgeChunkPayload）。
-
-    Returns:
-        已插入的主键 ID 列表（与 PostgreSQL `knowledge_chunks.id` 同源）。
-    """
-    if not chunks:
-        return []
-    data = [c.model_dump() for c in chunks]
-    result = client.insert(collection_name=COLLECTION_NAME, data=data)
-    client.flush(COLLECTION_NAME)  # 让数据立即可被 search
-    ids = []
-    if isinstance(result, dict):
-        ids = result.get("primary_keys", []) or result.get("ids", []) or []
-    else:
-        ids = getattr(result, "primary_keys", None) or []
-    logger.info(f"Milvus 插入并 flush {len(ids)} chunks 到 {COLLECTION_NAME}")
+async def insert_chunks(session: AsyncSession, items: List[Dict[str, Any]]) -> List[int]:
+    """批量写回 embedding。items: [{"id": int, "embedding": [float]}...]，返回成功 id 列表。"""
+    ids: List[int] = []
+    for it in items:
+        await session.execute(
+            update(KnowledgeChunk).where(KnowledgeChunk.id == it["id"]).values(embedding=it["embedding"])
+        )
+        ids.append(it["id"])
+    await session.commit()
+    logger.info(f"pgvector 写回 {len(ids)} 条 knowledge embedding")
     return ids
 
 
-def search(
-    client: MilvusClient,
+async def search(
+    session: AsyncSession,
     query_vector: List[float],
     top_k: int = 4,
     document_ids: Optional[List[int]] = None,
     min_score: float = 0.0,
 ) -> List[Dict[str, Any]]:
-    """向量检索
-
-    Args:
-        client: Milvus 客户端实例。
-        query_vector: 已向量化的查询文本。
-        top_k: 返回的最多 chunk 数。
-        document_ids: 可选的 document_id 白名单（in 过滤）。
-        min_score: 相似度下限（L2 → 0-1 归一化后的相似度），低于此值的命中被丢弃。
-
-    Returns:
-        [{"id", "document_id", "chunk_index", "content", "content_hash",
-          "metadata", "similarity"}, ...]
-    """
-    filter_expr = ""
+    """向量检索（L2），返回与原 Milvus 版一致的 dict 结构。"""
+    distance = KnowledgeChunk.embedding.l2_distance(query_vector).label("distance")
+    stmt = select(KnowledgeChunk, distance).where(KnowledgeChunk.embedding.isnot(None))
     if document_ids:
-        ids_str = ", ".join(str(i) for i in document_ids)
-        filter_expr = f"document_id in [{ids_str}]"
+        stmt = stmt.where(KnowledgeChunk.document_id.in_(document_ids))
+    stmt = stmt.order_by(distance).limit(top_k)
 
-    results = client.search(
-        collection_name=COLLECTION_NAME,
-        data=[query_vector],
-        anns_field=EMBEDDING_FIELD,
-        search_params=DEFAULT_SEARCH_PARAMS,
-        limit=top_k,
-        output_fields=["document_id", "chunk_index", "content", "content_hash", "metadata"],
-        filter=filter_expr,
-    )
-
+    rows = (await session.execute(stmt)).all()
     out: List[Dict[str, Any]] = []
-    for hits in results:
-        for hit in hits:
-            score = l2_distance_to_similarity(float(hit["distance"]))
-            if score < min_score:
-                continue
-            out.append({
-                "id": hit["id"],
-                "document_id": hit["entity"].get("document_id"),
-                "chunk_index": hit["entity"].get("chunk_index"),
-                "content": hit["entity"].get("content"),
-                "content_hash": hit["entity"].get("content_hash"),
-                "metadata": hit["entity"].get("metadata") or {},
-                "similarity": score,
-            })
+    for chunk, dist in rows:
+        score = l2_distance_to_similarity(float(dist))
+        if score < min_score:
+            continue
+        out.append({
+            "id": chunk.id,
+            "document_id": chunk.document_id,
+            "chunk_index": chunk.chunk_index,
+            "content": chunk.content,
+            "content_hash": chunk.content_hash,
+            "metadata": chunk.metadata_ or {},
+            "similarity": score,
+        })
     return out
 
 
-def delete_by_document(client: MilvusClient, document_id: int) -> int:
-    """按 document_id 删除该文档下的所有 chunks。
-
-    Args:
-        client: Milvus 客户端实例。
-        document_id: 目标文档的 PostgreSQL ID。
-
-    Returns:
-        实际删除的 chunk 条数。
-    """
-    result = client.delete(
-        collection_name=COLLECTION_NAME,
-        filter=f"document_id == {document_id}",
+async def delete_by_document(session: AsyncSession, document_id: int) -> int:
+    """清空该文档下所有 chunk 的 embedding（行本身由 PG 级联删除管理）。"""
+    result = await session.execute(
+        update(KnowledgeChunk).where(KnowledgeChunk.document_id == document_id).values(embedding=None)
     )
-    count = result.get("delete_count", 0) if isinstance(result, dict) else getattr(result, "delete_count", 0)
-    logger.info(f"Milvus 删除 document_id={document_id}, count={count}")
-    return count
+    await session.commit()
+    return result.rowcount or 0
 
 
-def get_by_ids(client: MilvusClient, ids: List[int]) -> List[Dict[str, Any]]:
-    """按主键批量获取 chunks。
-
-    常用于父子块组装或检索结果的引用回溯。
-
-    Args:
-        client: Milvus 客户端实例。
-        ids: 待查询的 chunk ID 列表。
-
-    Returns:
-        chunks 数据列表，每项包含 document_id、chunk_index、content、content_hash、metadata 等字段。
-    """
+async def get_by_ids(session: AsyncSession, ids: List[int]) -> List[Dict[str, Any]]:
+    """按主键批量取 chunk 元数据。"""
     if not ids:
         return []
-    ids_str = ", ".join(str(i) for i in ids)
-    results = client.query(
-        collection_name=COLLECTION_NAME,
-        filter=f"id in [{ids_str}]",
-        output_fields=["document_id", "chunk_index", "content", "content_hash", "metadata"],
-    )
-    return list(results)
+    rows = (await session.execute(select(KnowledgeChunk).where(KnowledgeChunk.id.in_(ids)))).scalars().all()
+    return [{
+        "id": c.id,
+        "document_id": c.document_id,
+        "chunk_index": c.chunk_index,
+        "content": c.content,
+        "content_hash": c.content_hash,
+        "metadata": c.metadata_ or {},
+    } for c in rows]
