@@ -26,7 +26,7 @@ const routes = [
   { path: '/:pathMatch(.*)*', name: 'NotFound', component: () => import('../views/NotFound.vue') }
 ]
 
-const router = createRouter({ history: createWebHistory(), routes })
+const router = createRouter({ history: createWebHistory('/admin/'), routes })
 
 router.beforeEach((to, from, next) => {
   const authStore = useAuthStore()
