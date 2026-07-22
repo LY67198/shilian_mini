@@ -23,30 +23,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  celery-worker:
-    environment:
-      - ENV=production
-    volumes:
-      - ./logs:/app/logs
-      - ./uploads:/app/uploads
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  celery-beat:
-    environment:
-      - ENV=production
-    volumes:
-      - ./logs:/app/logs
-      - ./celerybeat-schedule.db:/app/celerybeat-schedule.db
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "5m"
-        max-file: "2"
-
   postgres:
     ports: []
     logging:
@@ -81,12 +57,3 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-  flower:
-    ports:
-      - "127.0.0.1:${FLOWER_PORT:-5555}:5555"
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "5m"
-        max-file: "2"

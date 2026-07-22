@@ -47,30 +47,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      milvus:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-
-  # Celery Worker - 复用开发环境镜像
-  celery-worker:
-    image: ai-interview:dev
-    environment:
-      - ENV=development
-    volumes:
-      - ./app:/app/app
-      - ./logs:/app/logs
-      - ./eval:/app/eval
-    networks:
-      - app-network
-
-  # Celery Beat - 复用开发环境镜像
-  celery-beat:
-    image: ai-interview:dev
-    networks:
-      - app-network
-    depends_on:
-      - app
 
   # 在开发环境中禁用Nginx服务
   nginx:
