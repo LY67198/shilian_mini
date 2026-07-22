@@ -3,7 +3,7 @@
 字段：
 - id / category / position_tag / difficulty
 - question / reference_answer / key_points (JSONB) / tags (JSONB)
-- embedding_text: 用于生成 embedding 的原始文本（向量已迁到 Milvus）
+- embedding_text: 用于生成 embedding 的原始文本（向量存于 PostgreSQL 的 pgvector 列）
 - source: manual / imported / ai_generated
 - use_count / is_active / created_by
 

@@ -3,7 +3,7 @@
 Phase 4 补全：question_bank_repo + knowledge_repo + interview_repo 补全。
 
 ## 规则
-1. **纯 DB 操作**：repository 函数不调 LLM / Milvus / Redis
+1. **纯 DB 操作**：repository 函数不调 LLM / pgvector / Redis
 2. **不抛 HTTPException**：用普通 Python exceptions 或返回 None
 3. **事务边界**：repository 函数不 commit()，由调用方管事务
 4. **async 优先**：所有 DB 操作 async

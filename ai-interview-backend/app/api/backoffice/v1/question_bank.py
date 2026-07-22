@@ -29,7 +29,7 @@ router = APIRouter()
 
 
 def _to_response(q) -> dict:
-    """ORM 对象 → 响应字典（embedding 在 Milvus 端，所有有效记录都有 embedding）"""
+    """ORM 对象 → 响应字典（embedding 存于 Postgres vector 列，与元数据同表）"""
     return {
         "id": q.id,
         "category": q.category,

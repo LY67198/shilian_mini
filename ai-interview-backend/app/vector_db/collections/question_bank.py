@@ -38,7 +38,7 @@ async def search(
     difficulty: Optional[str] = None,
     min_score: float = 0.7,
 ) -> List[Dict[str, Any]]:
-    """向量检索 + 过滤，返回与原 Milvus 版一致的 dict 结构。"""
+    """向量检索 + 过滤，返回标准化的 dict 结构。"""
     distance = QuestionBank.embedding.l2_distance(query_vector).label("distance")
     stmt = select(QuestionBank, distance).where(
         QuestionBank.embedding.isnot(None), QuestionBank.is_active.is_(True)

@@ -1,4 +1,4 @@
-"""check_finished node — 判断是否面试结束（纯函数，不调 DB/LLM/Milvus）"""
+"""check_finished node — 判断是否面试结束（纯函数，不调 DB/LLM/pgvector）"""
 from __future__ import annotations
 
 from app.workflows.interview.state import InterviewState

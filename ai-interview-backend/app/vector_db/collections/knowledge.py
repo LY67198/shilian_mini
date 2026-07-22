@@ -46,7 +46,7 @@ async def search(
     document_ids: Optional[List[int]] = None,
     min_score: float = 0.0,
 ) -> List[Dict[str, Any]]:
-    """向量检索（L2），返回与原 Milvus 版一致的 dict 结构。"""
+    """向量检索（L2），返回标准化的 dict 结构。"""
     distance = KnowledgeChunk.embedding.l2_distance(query_vector).label("distance")
     stmt = select(KnowledgeChunk, distance).where(KnowledgeChunk.embedding.isnot(None))
     if document_ids:

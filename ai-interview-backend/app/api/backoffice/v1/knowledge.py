@@ -289,7 +289,7 @@ async def list_document_chunks(
             "document_id": c.document_id,
             "chunk_index": c.chunk_index,
             "content": c.content,
-            "has_embedding": c.content_hash is not None,  # 用 content_hash 字段推断（embedding 在 Milvus 端）
+            "has_embedding": c.content_hash is not None,  # 用 content_hash 字段推断（embedding 存于同一行）
             "created_at": c.created_at.isoformat() if c.created_at else None,
         }
         for c in rows

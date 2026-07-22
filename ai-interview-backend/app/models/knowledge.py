@@ -6,7 +6,7 @@
 - KnowledgeChunk：id / document_id / chunk_index / content / content_hash / metadata (JSONB)
 
 约束：
-- chunk.embedding 已迁出 PostgreSQL，存于 Milvus collection "knowledge_chunks"
+- chunk.embedding 存于 PostgreSQL 的 pgvector 列
 - document_id 外键级联删除 (ondelete=CASCADE)
 """
 

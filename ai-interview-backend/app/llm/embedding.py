@@ -2,7 +2,7 @@
 
 业务元数据:
 - DashScope text-embedding-v3 输出 1024 维向量
-- 已归一化，可与 Milvus L2 距离度量配合（见 vector_db/index.py）
+- 已归一化，可与 pgvector L2 距离度量配合（见 vector_db/index.py）
 """
 from __future__ import annotations
 
