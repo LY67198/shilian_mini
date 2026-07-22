@@ -1,6 +1,6 @@
 # 试炼 (MockPilot)
 
-基于 FastAPI + LangGraph + Milvus 的企业级 AI 模拟面试平台，集成简历解析、RAG 题库、多轮面试编排、AI 评分与结构化报告生成。
+基于 FastAPI + LangGraph + pgvector 的企业级 AI 模拟面试平台，集成简历解析、RAG 题库、多轮面试编排、AI 评分与结构化报告生成。
 
 站在候选人立场，反复训练锻造面试能力 — 不是单次对话，是可循环的练习场。
 
@@ -8,7 +8,7 @@
 
 简历解析 — PDF / DOCX / TXT 上传，自动结构化抽取教育、技能、项目经历
 岗位匹配 — LangChain ReAct Agent，5 工具链串联：简历读取 → 画像构建 → 岗位匹配 → 面试方向 → 启动面试
-题库 RAG — Milvus 向量召回 + 倒排索引 + RRF 融合 + Cross-Encoder 重排 + 自检循环
+题库 RAG — pgvector 向量召回 (Postgres 原生 HNSW) + 倒排索引 + RRF 融合 + Cross-Encoder 重排 + 自检循环
 多轮面试 — LangGraph StateGraph 编排，断点续传，PostgresSaver 状态持久化
 AI 评分 — 参考答案 + 知识库片段注入评分 Prompt，减少幻觉
 面试报告 — 综合评估 + 分项得分 + 优势/不足 + 改进建议
@@ -27,9 +27,8 @@ RAG 质量评估 — RAGAS 离线指标（faithfulness / answer_relevancy / cont
 | 后端框架 | FastAPI 0.115 | RESTful API + SSE 流式 |
 | 数据校验 | Pydantic 2.11 | 请求 / 响应模型 + Settings |
 | 数据库 | PostgreSQL 16 | 主业务数据 + LangGraph Checkpoint |
-| 向量数据库 | Milvus 2.4.10 | RAG 文档 / 题库嵌入与检索 |
+| 向量数据库 | pgvector (Postgres 内置) | RAG 文档 / 题库嵌入与检索 |
 | 向量索引 | HNSW + L2 | 1024 维向量近似最近邻（DashScope 已归一化，L2 等价 COSINE） |
-| 对象存储 | MinIO | Milvus standalone 内部存储 |
 | 缓存 / 锁 | Redis 7 | 登录限流 + Celery Broker |
 | 异步任务 | Celery 5.5 | 邮件 / 验证码发送 |
 | Agent | LangChain 1.3 | 工具调用 + create_agent |
@@ -44,7 +43,7 @@ RAG 质量评估 — RAGAS 离线指标（faithfulness / answer_relevancy / cont
 | 可观测 | LangSmith | LangGraph 节点级 trace（可选） |
 | 前端 | Vue 3 + Vite 5 + Pinia | 用户端 + 管理端 |
 | 构建 | Vite | 前端工程化 |
-| 部署 | Docker Compose | 7 容器一键启动 |
+| 部署 | Docker Compose | 4 容器一键启动 |
 
 ## 快速开始
 
@@ -60,10 +59,10 @@ RAG 质量评估 — RAGAS 离线指标（faithfulness / answer_relevancy / cont
 
 ```bash
 cd ai-interview-backend
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+docker compose -f docker-compose.lite.yml up -d --build
 ```
 
-启动 7 个容器：`shilian-app` / `shilian-postgres` / `shilian-redis` / `shilian-minio` / `shilian-milvus` / `shilian-celery-worker` / `shilian-celery-beat`。
+启动 4 个容器：`shilian-app` / `shilian-postgres` / `shilian-redis` / `shilian-nginx`。
 
 ### 2. 后端初始化
 
@@ -74,7 +73,6 @@ cp .env.example .env
 docker exec shilian-app alembic upgrade head
 docker exec shilian-app python scripts/create_first_admin.py
 docker exec shilian-app python scripts/seed_position_templates.py
-docker exec shilian-app python scripts/init_milvus.py
 ```
 
 ### 3. 前端启动
@@ -97,11 +95,11 @@ npm run dev
 
 ```bash
 # 后端健康
-curl http://localhost:8006/api/v1/config/health
+curl http://localhost/api/v1/config/health
 
 # Swagger 文档
-# 用户端：http://localhost:8006/client/docs
-# 管理端：http://localhost:8006/backoffice/docs
+# 用户端：http://localhost/client/docs
+# 管理端：http://localhost/backoffice/docs
 ```
 
 ### 5. RAG 质量评估（可选）
@@ -127,7 +125,7 @@ ai-interview-agent/
 │   │   │   ├── interview/            # 多轮面试 StateGraph
 │   │   │   ├── retrieval_check/      # RAG 自检循环
 │   │   │   └── _shared/              # 共享基础设施
-│   │   ├── vector_db/                # Milvus 客户端 + collections
+│   │   ├── vector_db/                # pgvector (HNSW 索引)
 │   │   ├── retrieval/                # RAG 检索引擎（vector + BM25 + RRF + rerank）
 │   │   ├── llm/                      # LangChain 域（LLM / embedding）
 │   │   ├── repositories/             # 数据访问层
@@ -195,7 +193,7 @@ ai-interview-agent/
 
 ### 混合检索与重排序
 
-向量召回（Milvus HNSW）+ 倒排索引（BM25）+ RRF 倒数秩融合 + Cross-Encoder 重排序（qwen3-rerank）。所有召回结果按相似度统一排序，知识库与题库使用同一管线，支持 self-check 循环自动改写 query 提升召回质量。
+向量召回（pgvector HNSW）+ 倒排索引（BM25）+ RRF 倒数秩融合 + Cross-Encoder 重排序（qwen3-rerank）。所有召回结果按相似度统一排序，知识库与题库使用同一管线，支持 self-check 循环自动改写 query 提升召回质量。
 
 ### LangGraph 多轮面试编排
 
@@ -218,7 +216,7 @@ LangSmith 全链路 trace、SSE 实时推送节点切换事件、structured outp
 
 ### 工业级工程化
 
-7 个服务（App + Postgres + Redis + MinIO + Milvus + Celery）Docker Compose 一键启动；embedding 与业务数据分离存储（PG 存元数据，Milvus 存向量）；Alembic 数据库迁移；Pytest 分层标记（unit / smoke / integration / e2e）；CI 友好。
+4 个服务（App + Postgres(pgvector) + Redis + Nginx）Docker Compose 一键启动；embedding 与业务数据同库 co-location（PG 存元数据 + Vector(1024) 列）；Alembic 数据库迁移；Pytest 分层标记（unit / smoke / integration / e2e）；CI 友好。
 
 ## 许可
 
