@@ -56,5 +56,6 @@ EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${API_PORT:-8001}/api/v1/config/health')" || exit 1
 
-# Start command
-CMD ["python", "main.py"]
+# Start command: start.sh 后台拉起 celery worker (内嵌 beat) + 前台跑 uvicorn
+RUN chmod +x /app/start.sh
+CMD ["/app/start.sh"]
