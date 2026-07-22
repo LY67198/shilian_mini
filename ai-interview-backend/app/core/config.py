@@ -2,9 +2,8 @@
 
 按段组织：
 - 环境配置（ENV / 项目基础信息 / CORS / Docker 端口）
-- 数据库配置（PostgreSQL）
+- 数据库配置（PostgreSQL + pgvector）
 - Redis 配置
-- Milvus 向量数据库配置
 - Celery 配置（broker / result backend）
 - HTTP 代理配置（仅测试环境使用）
 - 邮件 / Brevo 配置
@@ -53,17 +52,6 @@ class Settings(BaseSettings):
     REDIS_HOST: str = "redis"
     REDIS_PORT: int = 6379
     REDIS_PASSWORD: str = ""
-
-    # Milvus 向量数据库配置
-    # 容器内默认 host="milvus"，宿主开发时改为 "localhost"
-    MILVUS_HOST: str = "milvus"
-    MILVUS_PORT: int = 19530
-    MILVUS_USER: str = ""
-    MILVUS_PASSWORD: str = ""
-    MILVUS_DB_NAME: str = "default"
-    # Collection 名称（未来改 schema 不影响 Postgres）
-    MILVUS_COLLECTION_KNOWLEDGE: str = "knowledge_chunks"
-    MILVUS_COLLECTION_QUESTION_BANK: str = "question_bank"
 
     # Celery 配置
     CELERY_BROKER_URL: str = ""  # 在 __init__ 中设置
