@@ -214,8 +214,6 @@ class KnowledgeService:
 
         返回列表：[{id, document_id, chunk_index, content, content_hash, metadata, similarity}, ...]
         """
-        if db is None:
-            raise ValueError("retrieve_chunks requires a non-None db session")
         query_vec = await embed_text(query)
         return await knowledge_vdb.search(
             db,

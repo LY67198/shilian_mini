@@ -259,8 +259,6 @@ class QuestionBankService:
         min_score: float = 0.7,
     ) -> list[dict]:
         """语义检索（pgvector 端执行，支持 position_tag / difficulty 过滤）"""
-        if db is None:
-            raise ValueError("retrieve_questions requires a non-None db session")
         query_vec = await embed_text(query)
         return await question_vdb.search(
             db,

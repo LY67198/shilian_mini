@@ -63,7 +63,6 @@ async def submit_answer(
         "configurable": {
             "thread_id": f"interview-{interview_id}",
             "db": db,
-            "session": db,
             "evaluator_agent": EvaluatorAgent(),
             "report_agent": ReportAgent(),
             "retrieval_check_service": _build_retrieval_check_service(
@@ -139,7 +138,7 @@ def _build_retrieval_check_service(session: AsyncSession, is_first_call: bool):
         return None
 
     knowledge_bm25 = get_knowledge_bm25()
-    if not knowledge_bm25:
+    if not knowledge_bm25 or not session:
         return None
 
     knowledge_pipeline = RetrievalPipeline(
