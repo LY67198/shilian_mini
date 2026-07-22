@@ -11,7 +11,7 @@ if [ "$1" = "--skip-frontend" ]; then
     SKIP_FRONTEND=true
 fi
 
-COMPOSE_FILES="${COMPOSE_FILES:-"-f docker-compose.yml -f docker-compose.prod.yml"}"
+COMPOSE_FILES="${COMPOSE_FILES:-"-f docker-compose.lite.yml"}"
 API_PORT="${API_PORT:-8001}"
 HEALTH_ENDPOINT="http://localhost:${API_PORT}/api/v1/config/health"
 TIMEOUT=120
