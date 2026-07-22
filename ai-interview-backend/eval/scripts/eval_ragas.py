@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from app.llm.client import get_chat_llm
 from app.llm.embedding import embed_text
-from app.vector_db import get_milvus_client
+from app.db.base import get_session_local
 from app.vector_db.collections import knowledge as knowledge_vdb
 
 logging.basicConfig(level=logging.INFO)
@@ -63,7 +63,7 @@ async def run_evaluation(args):
     entries = golden.get("entries", [])
     logger.info(f"Loaded {len(entries)} golden entries")
 
-    client = get_milvus_client()
+    session_factory = get_session_local()
     llm = get_chat_llm(temperature=0.0)
     samples = []
 
@@ -72,17 +72,18 @@ async def run_evaluation(args):
         reference = entry["reference_answer"]
 
         # Retrieve context using current pipeline (vector only for baseline)
-        try:
-            query_vec = await embed_text(query)
-            chunks = knowledge_vdb.search(
-                client=client,
-                query_vector=query_vec,
-                top_k=4,
-            )
-            contexts = [c.get("content", "") for c in chunks if c.get("content")]
-        except Exception as e:
-            logger.warning(f"Retrieval failed for {entry['id']}: {e}")
-            contexts = []
+        async with session_factory() as session:
+            try:
+                query_vec = await embed_text(query)
+                chunks = knowledge_vdb.search(
+                    session=session,
+                    query_vector=query_vec,
+                    top_k=4,
+                )
+                contexts = [c.get("content", "") for c in chunks if c.get("content")]
+            except Exception as e:
+                logger.warning(f"Retrieval failed for {entry['id']}: {e}")
+                contexts = []
 
         if not contexts:
             logger.warning(f"No contexts retrieved for {entry['id']}, skipping")
