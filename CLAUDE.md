@@ -204,10 +204,12 @@ agent 全链曾出现偶发 API 不稳定（"Connection error." / interview_resu
 
 **2026-08-01 出题 SSE 流式化（进行中）**：`/interviews/start` 的 16s 等待里 ~14s 是单次 DeepSeek 选题 LLM（`chain.ainvoke` 一次性阻塞），前端 `ResumeUpload.vue:handleStart` 只显示假进度条动画。改造为 `?stream=true` 全程 SSE（status → chunk token 逐字流出 → done），前端实时增量 JSON 解析让题目逐条浮现，消除假进度条等待。**总耗时不变，只改善感知**。设计：`docs/superpowers/specs/2026-08-01-question-streaming-sse-design.md`；计划：`docs/superpowers/plans/2026-08-01-question-streaming-sse.md`。
 
-- **执行中（subagent-driven，7 任务 TDD）**：
+- **执行中（subagent-driven，7 任务 TDD；下次从 Task 3 继续）**：
   - ✅ Task 1 `try_parse_partial_array` 增量 JSON 数组解析（前端 tryParseQuestions 算法后端等价版，供单测）`b2c17e7`
-  - ✅ Task 2 `select_and_adapt_questions_stream` 流式选题（`chain.astream` 逐 token + 异常兜底仍回退候选前 N 题）`36c773c`
-  - ⏳ Task 3-7 待执行：`_prepare_questions` 抽取 / `start_interview_stream`（status→chunk→done）/ 路由 `?stream=true` / 前端 `startInterviewStream`+`tryParseQuestions` / `ResumeUpload.vue` 流式化
+  - ✅ Task 2 `select_and_adapt_questions_stream` 流式选题（`chain.astream` 逐 token + 异常兜底仍回退候选前 N 题）`36c773c`。code quality review **Ready to merge: Yes**，遗留 1 项 Important（非阻塞）：stream/v2 输入构造一致性未测——补一个"astream 收到的 candidates_json 只含 id+question"测试（对齐 v2 的 `test_sends_slim_candidates_to_llm`，tests/test_ai_service_unit.py:157），建议收尾时补
+  - ⏳ Task 3 `_prepare_questions` 抽取：已派发未执行（用户暂停，**下次从这开始**，纯重构回归保护）
+  - ⏳ Task 4-7 待执行：`start_interview_stream`（status→chunk→done）/ 路由 `?stream=true` / 前端 `startInterviewStream`+`tryParseQuestions` / `ResumeUpload.vue` 流式化
+  - 执行方式：subagent-driven（每任务 implementer + spec review + code quality review），计划见 `docs/superpowers/plans/2026-08-01-question-streaming-sse.md`
 - 实现注记：Task 2 里 `chain.astream(input={...})` 用关键字形式（测试 mock 只收关键字参数；LangChain `Runnable.astream(self, input, ...)` 首参即 input，真实有效）。计划原文 `chain.astream({...})` 位置参数会 TypeError。
 - **RAG 链路已全量验证生效**（本次调查确认）：双路检索（vector+BM25，DB 两表 embedding 84/84+32/32 全填充）、rerank（`gte-rerank-v2`，日志 200）、自检（retrieval_check 接入答题链路）。唯一告警是 DeepSeek 偶发 `Connection error`（有兜底不阻断）。
 - 提交全在本地 dev，不 push。
