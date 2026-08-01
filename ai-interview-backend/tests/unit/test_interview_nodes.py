@@ -9,17 +9,17 @@ class TestCheckFinished:
     """check_finished_node — 纯函数节点，无外部依赖"""
 
     async def test_not_finished(self):
-        state = {"current_index": 2, "total_questions": 5}
+        state = {"current_index": 2, "questions": [{}] * 5}
         result = await check_finished_node(state)
         assert result == {"is_finished": False}
 
     async def test_finished_last_question(self):
-        state = {"current_index": 4, "total_questions": 5}
+        state = {"current_index": 4, "questions": [{}] * 5}
         result = await check_finished_node(state)
         assert result == {"is_finished": True}
 
     async def test_finished_beyond_last(self):
-        state = {"current_index": 5, "total_questions": 5}
+        state = {"current_index": 5, "questions": [{}] * 5}
         result = await check_finished_node(state)
         assert result == {"is_finished": True}
 
@@ -27,6 +27,12 @@ class TestCheckFinished:
         state = {}
         result = await check_finished_node(state)
         assert result == {"is_finished": True}  # 0 + 1 >= 0 → True
+
+    async def test_fewer_questions_than_target_still_finishes(self):
+        """LLM 出题不足（len(questions) < total_questions）时按实际题数结束"""
+        state = {"current_index": 4, "questions": [{}] * 5, "total_questions": 8}
+        result = await check_finished_node(state)
+        assert result == {"is_finished": True}
 
 
 @pytest.mark.unit
