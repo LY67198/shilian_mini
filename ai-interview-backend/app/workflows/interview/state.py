@@ -51,6 +51,7 @@ class InterviewState(BaseWorkflowState, total=False):
 
     # ── 知识库（retrieve_knowledge 写入）──
     knowledge_context: list[str]
+    retrieval_debug: Optional[dict]   # 自检检索 debug_info（轮次/重写 query/召回数）
 
     # ── 评分（evaluate 写入）──
     score: float

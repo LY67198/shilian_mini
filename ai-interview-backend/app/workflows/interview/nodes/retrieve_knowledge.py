@@ -39,6 +39,7 @@ async def retrieve_knowledge_node(state: InterviewState, config: RunnableConfig)
         )
         return {
             "knowledge_context": result.final_context,
+            "retrieval_debug": result.debug_info,
         }
     except Exception as e:
         logger.warning(f"知识库 RAG 检索失败，跳过注入: {e}")

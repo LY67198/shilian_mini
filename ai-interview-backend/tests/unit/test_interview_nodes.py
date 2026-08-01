@@ -212,3 +212,35 @@ class TestExtractJson:
         result = extract_json(text)
         assert result["score"] == 8.5
         assert result["feedback"] == "优秀"
+
+
+@pytest.mark.unit
+class TestRetrieveKnowledgeNode:
+    """retrieve_knowledge_node — 委托 RetrievalCheckService，产出 knowledge_context + retrieval_debug"""
+
+    async def test_returns_context_and_debug_info(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from app.workflows.interview.nodes.retrieve_knowledge import retrieve_knowledge_node
+
+        fake_service = SimpleNamespace(
+            check_and_retrieve=AsyncMock(return_value=SimpleNamespace(
+                final_context=["知识片段1"],
+                debug_info={"total_retrieval_rounds": 2, "retry_count": 1},
+            ))
+        )
+        state = {"current_question": "什么是 GIL?"}
+        config = {"configurable": {"retrieval_check_service": fake_service}}
+
+        result = await retrieve_knowledge_node(state, config)
+        assert result["knowledge_context"] == ["知识片段1"]
+        assert result["retrieval_debug"] == {"total_retrieval_rounds": 2, "retry_count": 1}
+
+    async def test_service_missing_returns_empty(self):
+        from app.workflows.interview.nodes.retrieve_knowledge import retrieve_knowledge_node
+
+        state = {"current_question": "什么是 GIL?"}
+        config = {"configurable": {}}
+
+        result = await retrieve_knowledge_node(state, config)
+        assert result == {"knowledge_context": []}

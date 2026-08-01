@@ -61,9 +61,7 @@ async def submit_answer(
         "configurable": {
             "thread_id": f"interview-{interview_id}",
             "db": db,
-            "retrieval_check_service": _build_retrieval_check_service(
-                db, is_first_call
-            ),
+            "retrieval_check_service": _build_retrieval_check_service(db),
         },
     }
 
@@ -124,15 +122,13 @@ def _extract_response(state: dict) -> dict:
     return response
 
 
-def _build_retrieval_check_service(session: AsyncSession, is_first_call: bool):
+def _build_retrieval_check_service(session: AsyncSession):
     """Wire up RetrievalCheckService for hybrid RAG (Phase 3).
 
-    Only builds the service on the first call to avoid re-initializing
-    the pipeline on every HITL resume round.
+    每轮无条件构建：BM25 为 lifespan 预构建单例、pipeline 构造纯属性赋值，
+    开销可忽略；每轮使用当前请求的新 session 更正确。修复原 is_first_call
+    门控 bug —— HITL resume 后后续题目不再注入知识。
     """
-    if not is_first_call:
-        return None
-
     knowledge_bm25 = get_knowledge_bm25()
     if not knowledge_bm25 or not session:
         return None
