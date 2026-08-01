@@ -90,3 +90,29 @@ class TestRagFullPipeline:
             assert results, "题库检索不应为空"
             for r in results:
                 assert r.metadata, "题库结果应携带 metadata（reference_answer 等）"
+
+
+@pytest.mark.asyncio
+class TestRetrievalCheckLoop:
+    """RetrievalCheckService.check_and_retrieve 自检循环（sufficiency + rewrite）"""
+
+    async def test_check_and_retrieve_returns_context(self):
+        from app.db.base import get_session_local
+        from app.retrieval.bm25_lifecycle import get_knowledge_bm25
+        from app.retrieval.pipeline import RetrievalPipeline
+        from app.workflows.retrieval_check.service import RetrievalCheckService
+
+        async with get_session_local()() as session:
+            pipeline = RetrievalPipeline(
+                session=session,
+                collection="knowledge_chunks",
+                bm25_index=get_knowledge_bm25(),
+                final_top_k=5,
+                enable_rerank=True,
+            )
+            service = RetrievalCheckService(pipeline, max_retries=1)
+            result = await service.check_and_retrieve("什么是 Python GIL？")
+            assert result.final_context, "final_context 不应为空"
+            assert result.debug_info
+            assert "rounds" in result.debug_info
+            assert result.debug_info["total_retrieval_rounds"] >= 1
