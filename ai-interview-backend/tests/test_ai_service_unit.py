@@ -251,7 +251,7 @@ class TestSelectAndAdaptQuestionsStream:
     """select_and_adapt_questions_stream — chain.astream 逐 token 产出的流式选题孪生"""
 
     @staticmethod
-    def _patch_llm_stream(monkeypatch, chunks):
+    def _patch_llm_stream(monkeypatch, chunks, capture=None):
         from unittest.mock import AsyncMock
 
         from app.services.client import ai_service as mod
@@ -259,6 +259,8 @@ class TestSelectAndAdaptQuestionsStream:
         chain = AsyncMock()
 
         async def fake_astream(**kwargs):
+            if capture is not None:
+                capture["input"] = kwargs.get("input")
             for c in chunks:
                 yield type("C", (), {"content": c})()
 
@@ -347,3 +349,34 @@ class TestSelectAndAdaptQuestionsStream:
         assert result is not None
         assert len(result) == 2  # 异常后仍回退候选前 N 题
         assert result[0]["bank_id"] == 1
+
+    async def test_sends_slim_candidates_to_llm(self, monkeypatch):
+        """astream 收到的 candidates_json 只含 id+question，不含参考答案（对齐 v2 slim 测试）。"""
+        import json
+
+        from app.services.client.ai_service import ai_service
+
+        captured = {}
+        self._patch_llm_stream(
+            monkeypatch,
+            ['[{"index": 0, "question": "Q", "bank_id": 1}]'],
+            capture=captured,
+        )
+
+        async for _ in ai_service.select_and_adapt_questions_stream(
+            candidates=TestSelectAndAdaptQuestions.CANDIDATES,
+            parsed_resume={},
+            target_position="Python 后端",
+            difficulty="medium",
+            target_n=1,
+        ):
+            pass
+
+        sent = json.loads(captured["input"]["candidates_json"])
+        assert len(sent) == 3
+        assert all(set(q) == {"id", "question"} for q in sent)
+        assert sent == [
+            {"id": 1, "question": "讲下 Python 的 GIL"},
+            {"id": 2, "question": "asyncio 事件循环原理"},
+            {"id": 3, "question": "RESTful 限流怎么做"},
+        ]
