@@ -73,6 +73,9 @@ async def submit_answer(
     db: AsyncSession = Depends(get_db),
 ):
     """提交当前题目的回答（?stream=true 启动 SSE 流式评分）"""
+    # P1 修复：先校验归属权 + 进行中状态，再写库（此前越权消息会被持久化）
+    await _assert_owned_active(db, current_user.id, interview_id)
+
     if not stream:
         async for result in submit_answer_to_graph(
             db=db,
