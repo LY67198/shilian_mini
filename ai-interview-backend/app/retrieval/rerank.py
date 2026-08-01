@@ -1,6 +1,7 @@
 """DashScope qwen3-rerank cross-encoder reranking with graceful fallback."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from dashscope import TextReRank
@@ -36,7 +37,8 @@ async def cross_encoder_rerank(
     documents = [c.content for c in candidates]
 
     try:
-        resp = TextReRank.call(
+        resp = await asyncio.to_thread(
+            TextReRank.call,
             model=model,
             query=query,
             documents=documents,
