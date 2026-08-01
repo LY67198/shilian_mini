@@ -244,3 +244,106 @@ class TestSelectAndAdaptQuestions:
         )
         assert len(questions) == 3
         assert {q["bank_id"] for q in questions} == {1, 2, 3}
+
+
+@pytest.mark.unit
+class TestSelectAndAdaptQuestionsStream:
+    """select_and_adapt_questions_stream — chain.astream 逐 token 产出的流式选题孪生"""
+
+    @staticmethod
+    def _patch_llm_stream(monkeypatch, chunks):
+        from unittest.mock import AsyncMock
+
+        from app.services.client import ai_service as mod
+
+        chain = AsyncMock()
+
+        async def fake_astream(**kwargs):
+            for c in chunks:
+                yield type("C", (), {"content": c})()
+
+        chain.astream = fake_astream
+        mock_prompt = type("P", (), {"__or__": lambda self, other: chain})()
+        monkeypatch.setattr(mod, "load_prompt", lambda name: mock_prompt)
+        monkeypatch.setattr(mod, "get_chat_llm", lambda **kw: object())
+        return chain
+
+    async def test_yields_tokens_then_merged_result(self, monkeypatch):
+        from app.services.client.ai_service import ai_service
+
+        chunks = [
+            '[{"index": 0, "question": "讲下 Python 的 GIL（微调）", "category": "technical", "bank_id": 1, "source": "from_bank"},',
+            ' {"index": 1, "question": "asyncio 事件循环原理", "category": "technical", "bank_id": 2, "source": "from_bank"}]',
+        ]
+        self._patch_llm_stream(monkeypatch, chunks)
+
+        events = []
+        async for kind, payload in ai_service.select_and_adapt_questions_stream(
+            candidates=TestSelectAndAdaptQuestions.CANDIDATES,
+            parsed_resume={"skills": ["Python", "asyncio"]},
+            target_position="Python 后端",
+            difficulty="medium",
+            target_n=2,
+        ):
+            events.append((kind, payload))
+
+        kinds = [k for k, _ in events]
+        assert kinds == ["token", "token", "result"]
+        questions = events[-1][1]
+        assert len(questions) == 2
+        assert questions[0]["bank_id"] == 1
+        # 参考答案来自题库候选而非 LLM 输出
+        assert questions[0]["reference_answer"] == "GIL 是全局解释器锁..."
+        assert questions[1]["reference_answer"] == "事件循环基于协程..."
+
+    async def test_falls_back_when_aggregated_text_is_garbage(self, monkeypatch):
+        from app.services.client.ai_service import ai_service
+
+        self._patch_llm_stream(monkeypatch, ["这是", "乱码"])
+
+        result = None
+        async for kind, payload in ai_service.select_and_adapt_questions_stream(
+            candidates=TestSelectAndAdaptQuestions.CANDIDATES,
+            parsed_resume={},
+            target_position="Python 后端",
+            difficulty="medium",
+            target_n=2,
+        ):
+            if kind == "result":
+                result = payload
+
+        assert result is not None
+        assert len(result) == 2  # 回退候选前 N 题
+        assert result[0]["bank_id"] == 1
+
+    async def test_llm_error_still_yields_result_with_fallback(self, monkeypatch):
+        """astream 中途抛异常 → 仍 yield ("result", ...)，回退候选前 N 题（不 NameError）。"""
+        from unittest.mock import AsyncMock
+
+        from app.services.client import ai_service as mod
+        from app.services.client.ai_service import ai_service
+
+        async def broken_astream(**kwargs):
+            yield type("C", (), {"content": '[{"index": 0, "question": "Q", "bank_id": 1}'})()
+            raise RuntimeError("connection error")
+
+        chain = AsyncMock()
+        chain.astream = broken_astream
+        mock_prompt = type("P", (), {"__or__": lambda self, other: chain})()
+        monkeypatch.setattr(mod, "load_prompt", lambda name: mock_prompt)
+        monkeypatch.setattr(mod, "get_chat_llm", lambda **kw: object())
+
+        result = None
+        async for kind, payload in ai_service.select_and_adapt_questions_stream(
+            candidates=TestSelectAndAdaptQuestions.CANDIDATES,
+            parsed_resume={},
+            target_position="Python 后端",
+            difficulty="medium",
+            target_n=2,
+        ):
+            if kind == "result":
+                result = payload
+
+        assert result is not None
+        assert len(result) == 2  # 异常后仍回退候选前 N 题
+        assert result[0]["bank_id"] == 1

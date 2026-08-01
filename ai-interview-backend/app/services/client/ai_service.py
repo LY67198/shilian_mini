@@ -248,6 +248,60 @@ class AIService:
         selected = self._as_question_list(self._extract_json(content))
         return self._merge_selected_questions(selected, candidates, target_n)
 
+    async def select_and_adapt_questions_stream(
+        self,
+        candidates: list,
+        parsed_resume: dict,
+        target_position: str,
+        difficulty: str,
+        target_n: int,
+    ):
+        """v2 选题的流式孪生：chain.astream 逐 token 产出 + 最终合并结果。
+
+    Yields:
+        ("token", str) 逐 token 增量；
+        最后 ("result", list) 完整题目列表（含题库参考答案）。
+    输入构造、解析、补齐逻辑与 select_and_adapt_questions 完全一致，仅 ainvoke → astream。
+    流式中途异常时仍 yield ("result", ...)，由 _merge_selected_questions 回退候选前 N 题。
+    """
+        is_intern = any(kw in target_position for kw in ["实习", "intern", "Intern"])
+        intern_hint = (
+            "候选人为实习岗位，优先选择基础类、项目类问题。"
+            if is_intern
+            else ""
+        )
+
+        slim_candidates = [
+            {"id": c.get("id"), "question": c.get("question")}
+            for c in candidates
+        ]
+
+        prompt = load_prompt("question_select")
+        llm = get_chat_llm(temperature=0.3)
+        chain = prompt | llm
+
+        chunks: list[str] = []
+        try:
+            async for chunk in chain.astream(input={
+                "target_position": target_position,
+                "difficulty": difficulty,
+                "intern_hint": intern_hint,
+                "candidate_count": len(candidates),
+                "target_n": target_n,
+                "resume_json": json.dumps(parsed_resume, ensure_ascii=False),
+                "candidates_json": json.dumps(slim_candidates, ensure_ascii=False),
+            }):
+                text = chunk.content if hasattr(chunk, "content") else str(chunk)
+                if text:
+                    chunks.append(text)
+                    yield ("token", text)
+        except Exception as e:
+            logger.warning(f"选题流式中断，回退候选前 N 题: {e}")
+
+        content = "".join(chunks)
+        selected = self._as_question_list(self._extract_json(content))
+        yield ("result", self._merge_selected_questions(selected, candidates, target_n))
+
     @staticmethod
     def _merge_selected_questions(
         selected: list,
