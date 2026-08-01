@@ -335,3 +335,57 @@ class TestAskQuestion:
         mock_repo.update_question_index.assert_called_once_with(mock_db, 1, 2)
         assert result["current_index"] == 2
         assert result["next_question"] == "Q2"
+
+
+@pytest.mark.unit
+class TestGenerateReport:
+    async def test_uses_db_feedback_and_zero_fallback(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+        from app.workflows.interview.nodes.generate_report import generate_report_node
+        from app.workflows.interview.state import ReportResult
+
+        scored_msgs = [
+            SimpleNamespace(question_index=0, score=7.0, feedback="回答良好", content="答案A"),
+        ]
+        questions = [{"question": "Q0"}, {"question": "Q1"}]
+
+        mock_repo = AsyncMock()
+        mock_repo.get_scored_messages.return_value = scored_msgs
+
+        chain = AsyncMock()
+        chain.ainvoke.return_value = ReportResult(
+            summary="s", strengths=["st"], weaknesses=["w"],
+            suggestions=["su"], hire_recommendation="h",
+        )
+        mock_prompt = type("MockPrompt", (), {"__or__": lambda self, other: chain})()
+
+        state = {
+            "interview_id": 1,
+            "questions": questions,
+            "resume_context": {},
+            "target_position": "Python 后端",
+            "current_index": 0,
+            "answer": "答案A",
+            "score": 9.0,  # 旧代码会把此值泄漏给未评分题
+        }
+
+        with patch(
+            "app.workflows.interview.nodes.generate_report.interview_repo",
+            mock_repo,
+        ), patch(
+            "app.workflows.interview.nodes.generate_report.load_prompt",
+            return_value=mock_prompt,
+        ), patch(
+            "app.workflows.interview.nodes.generate_report.get_chat_llm"
+        ) as mock_get_llm:
+            mock_get_llm.return_value.with_structured_output.return_value = object()
+            result = await generate_report_node(
+                state, {"configurable": {"db": AsyncMock()}}
+            )
+
+        qs = result["report"]["question_scores"]
+        assert qs[0]["score"] == 7.0
+        assert qs[0]["feedback"] == "回答良好"   # P2-3: DB feedback 不再硬编码空
+        assert qs[1]["score"] == 0.0              # P2-4: 未评分回退 0.0 而非 9.0
+        assert qs[1]["feedback"] == ""

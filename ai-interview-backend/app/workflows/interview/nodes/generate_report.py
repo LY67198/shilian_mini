@@ -40,7 +40,7 @@ async def generate_report_node(state: InterviewState, config: RunnableConfig) ->
 
     for i, q in enumerate(questions):
         m = msg_by_idx.get(i)
-        score_val = float(m.score) if m and m.score else state.get("score", 0)
+        score_val = float(m.score) if m and m.score else 0.0
         answer_text = (
             m.content
             if m
@@ -50,6 +50,7 @@ async def generate_report_node(state: InterviewState, config: RunnableConfig) ->
             "question": q["question"],
             "answer": answer_text,
             "score": score_val,
+            "feedback": m.feedback if m and m.feedback else "",
         })
         all_scores.append(score_val)
 
@@ -85,7 +86,7 @@ async def generate_report_node(state: InterviewState, config: RunnableConfig) ->
         }
 
     report["question_scores"] = [
-        {"question": qa["question"], "score": qa["score"], "feedback": ""}
+        {"question": qa["question"], "score": qa["score"], "feedback": qa["feedback"]}
         for qa in qa_data
     ]
 
