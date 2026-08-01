@@ -21,6 +21,7 @@ from sqlalchemy import select
 from app.db.base import get_session_local
 from app.models.resume import Resume
 from app.models.position_template import PositionTemplate
+from app.repositories.interview_repo import interview_repo
 from app.services.client.ai_service import ai_service
 from app.services.backoffice.position_template_service import position_template_service
 
@@ -292,6 +293,24 @@ async def start_mock_interview(
 
         final_difficulty = difficulty or template.recommended_difficulty
         final_total = total_questions or template.recommended_question_count
+
+        # 幂等：同岗位已有进行中面试则直接返回，不重复创建
+        active = await interview_repo.get_active_by_position(
+            db, resume.user_id, resume_id, template.title
+        )
+        if active is not None:
+            questions = active.questions_data or []
+            logger.info(
+                f"[PositionAgent] 岗位 {position_tag} 已有进行中面试 id={active.id}，幂等返回"
+            )
+            return {
+                "interview_id": active.id,
+                "position_tag": position_tag,
+                "first_question": questions[0]["question"] if questions else None,
+                "question_index": 0,
+                "total_questions": active.total_questions,
+                "existing": True,
+            }
 
         try:
             result = await interview_service.start_interview(
