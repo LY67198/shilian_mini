@@ -119,3 +119,50 @@ class TestStartInterviewStream:
 
         assert [e for e, _ in parsed] == ["status", "done"]
         assert parsed[1][1]["first_question"] == "Q1"
+
+    async def test_error_event_after_status_when_prepare_raises(self, monkeypatch):
+        """_prepare_questions 抛异常 → status 后 yield error，前端不卡死。"""
+        async def fake_prepare_raises(self, **kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(mod.InterviewService, "_prepare_questions", fake_prepare_raises)
+
+        svc = mod.InterviewService()
+        sse_events = [s async for s in svc.start_interview_stream(
+            db=self._make_db_mock(),
+            user_id=1,
+            resume_id=1,
+            target_position="Python 后端",
+            difficulty="medium",
+            total_questions=1,
+        )]
+        parsed = _parse_sse_blocks(sse_events)
+
+        assert [e for e, _ in parsed] == ["status", "error"]
+        assert parsed[0][1] == {"message": "正在检索题库..."}
+        assert "message" in parsed[1][1]
+        assert "boom" in parsed[1][1]["message"]
+
+    async def test_validation_failure_yields_only_error_event(self):
+        """简历不存在 → 不 yield status，只 yield error（message 含 简历不存在）。"""
+        class _ScalarNone:
+            def scalar_one_or_none(self):
+                return None
+
+        db = AsyncMock()
+        db.execute.return_value = _ScalarNone()
+        db.add = lambda obj: None
+
+        svc = mod.InterviewService()
+        sse_events = [s async for s in svc.start_interview_stream(
+            db=db,
+            user_id=1,
+            resume_id=999,
+            target_position="Python 后端",
+            difficulty="medium",
+            total_questions=1,
+        )]
+        parsed = _parse_sse_blocks(sse_events)
+
+        assert [e for e, _ in parsed] == ["error"]
+        assert "简历不存在" in parsed[0][1]["message"]
