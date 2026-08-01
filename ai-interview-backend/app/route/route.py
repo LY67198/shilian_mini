@@ -43,12 +43,25 @@ else:
 async def lifespan(application: FastAPI):
     """FastAPI 应用生命周期钩子
 
-    启动时初始化日志；关闭时由主进程关闭日志系统，
+    启动时初始化日志、构建 BM25 关键词索引；
+    关闭时由主进程关闭日志系统，
     并统一释放 DB 引擎、Redis 连接、邮件线程池。
     """
     # 启动时执行
     setup_logging()
     logger.info("Application starting up")
+
+    # 构建 BM25 关键词索引（混合 RAG 检索必需）
+    try:
+        from app.db.base import get_session_local
+        from app.retrieval.bm25_lifecycle import build_bm25_indices
+
+        _session_local = get_session_local()
+        async with _session_local() as db:
+            await build_bm25_indices(db)
+        logger.info("BM25 indices built successfully")
+    except Exception:
+        logger.warning("BM25 index build failed — hybrid retrieval will be vector-only", exc_info=True)
 
     yield  # 应用运行期间
 
