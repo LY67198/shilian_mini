@@ -227,6 +227,38 @@ class InterviewRepository(BaseRepository[Interview]):
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_active_by_position(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        resume_id: int,
+        target_position: str,
+    ) -> Optional[Interview]:
+        """查询 (user_id, resume_id, target_position) 的进行中面试。
+
+    Args:
+        db: 数据库会话。
+        user_id: 用户 ID。
+        resume_id: 简历 ID。
+        target_position: 目标岗位标题。
+
+    Returns:
+        status=in_progress 且岗位匹配的 Interview，或 None。
+    """
+        stmt = (
+            select(Interview)
+            .where(
+                Interview.user_id == user_id,
+                Interview.resume_id == resume_id,
+                Interview.target_position == target_position,
+                Interview.status == "in_progress",
+            )
+            .order_by(Interview.id.desc())
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def delete_cascade(self, db: AsyncSession, interview_id: int) -> bool:
         """删除 interview + 关联 messages（事务内完成）。
 
