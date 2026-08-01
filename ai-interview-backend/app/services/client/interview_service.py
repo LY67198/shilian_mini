@@ -308,6 +308,128 @@ class InterviewService:
             "total_questions": total_questions
         }
 
+    async def start_interview_stream(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        resume_id: int,
+        target_position: str,
+        difficulty: str,
+        total_questions: int,
+    ):
+        """流式启动面试：SSE 产出 status → chunk* → done。
+
+        Yields:
+            SSE 字符串（_sse 编码）。复用 start_interview 的校验与落库逻辑，
+            仅把"选题 LLM 调用"替换为 ai_service.select_and_adapt_questions_stream 逐 token。
+        """
+        from app.workflows._shared.sse import _sse
+
+        # 简历归属 + 解析状态校验（与 start_interview 一致）
+        query = select(Resume).where(
+            Resume.id == resume_id,
+            Resume.user_id == user_id
+        )
+        result = await db.execute(query)
+        resume = result.scalar_one_or_none()
+
+        if not resume:
+            raise NotFoundError(message="简历不存在")
+        if resume.status != "completed":
+            raise ValidationError(message="简历尚未解析完成")
+
+        try:
+            parsed_resume = json.loads(resume.parsed_content)
+        except json.JSONDecodeError:
+            logger.error(f"简历 parsed_content 不是有效 JSON: resume_id={resume.id}")
+            raise ValidationError(message="简历数据异常，请重新上传")
+
+        # 1. 状态：检索中
+        yield _sse("status", {"message": "正在检索题库..."})
+
+        # 2. RAG 检索（流式/非流式共用）
+        candidates = await self._prepare_questions(
+            db=db,
+            parsed_resume=parsed_resume,
+            target_position=target_position,
+            difficulty=difficulty,
+            total_questions=total_questions,
+        )
+        cnt = len(candidates)
+        logger.info(f"[RAG出题] Hybrid recall: {cnt} questions, target: {total_questions}")
+
+        # 3. 选题：主分支流式，兜底分支非流式
+        if cnt >= total_questions:
+            logger.info(f"[RAG出题] 走【题库充分】分支（流式）")
+            async for kind, payload in ai_service.select_and_adapt_questions_stream(
+                candidates=candidates,
+                parsed_resume=parsed_resume,
+                target_position=target_position,
+                difficulty=difficulty,
+                target_n=total_questions,
+            ):
+                if kind == "token":
+                    yield _sse("chunk", {"content": payload})
+                else:
+                    questions = payload
+        elif cnt > 0:
+            logger.info(f"[RAG出题] 走【AI 兜底补全】分支（题库 {cnt} 题 + AI 补 {total_questions - cnt} 题）")
+            questions = await ai_service.generate_with_seeds(
+                seed_questions=candidates,
+                parsed_resume=parsed_resume,
+                target_position=target_position,
+                difficulty=difficulty,
+                target_n=total_questions,
+            )
+        else:
+            logger.warning(f"[RAG出题] 题库为空，走【纯 AI 生成】兜底分支")
+            questions = await ai_service.generate_questions(
+                parsed_resume=parsed_resume,
+                target_position=target_position,
+                difficulty=difficulty,
+                count=total_questions,
+            )
+            for q in questions:
+                q.setdefault("source", "ai_fallback")
+                q.setdefault("bank_id", None)
+
+        # 4. 落库（与 start_interview 一致）
+        bank_ids = [q.get("bank_id") for q in questions if q.get("bank_id")]
+        if bank_ids:
+            await question_bank_service.increment_use_count(db, bank_ids)
+
+        interview = Interview(
+            user_id=user_id,
+            resume_id=resume_id,
+            target_position=target_position,
+            difficulty=difficulty,
+            total_questions=total_questions,
+            current_question_index=0,
+            questions_data=questions,
+            status="in_progress"
+        )
+        db.add(interview)
+        await db.commit()
+        await db.refresh(interview)
+
+        first_question = questions[0]["question"]
+        msg = InterviewMessage(
+            interview_id=interview.id,
+            role="interviewer",
+            content=first_question,
+            question_index=0
+        )
+        db.add(msg)
+        await db.commit()
+
+        # 5. 完成：携带 interview_id 等（与 start_interview 返回一致）
+        yield _sse("done", {
+            "interview_id": interview.id,
+            "first_question": first_question,
+            "question_index": 0,
+            "total_questions": total_questions,
+        })
+
     async def get_report(
         self,
         db: AsyncSession,
