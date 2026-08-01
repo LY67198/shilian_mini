@@ -32,12 +32,12 @@ async def ask_question_node(state: InterviewState, config: RunnableConfig) -> di
     questions = state["questions"]
     next_index = current_index + 1
 
-    await interview_repo.update_question_index(db, interview_id, next_index)
-
     if next_index >= len(questions):
         raise RuntimeError(
             f"题目索引越界: next_index={next_index}, total={len(questions)}"
         )
+
+    await interview_repo.update_question_index(db, interview_id, next_index)
 
     next_question = questions[next_index]["question"]
     await interview_repo.create_message(

@@ -250,3 +250,48 @@ class TestRetrieveKnowledgeNode:
 
         result = await retrieve_knowledge_node(state, config)
         assert result == {"knowledge_context": []}
+
+
+@pytest.mark.unit
+class TestAskQuestion:
+    """ask_question_node — 越界必须在写 DB 之前触发"""
+
+    async def test_oob_raises_before_db_write(self):
+        from unittest.mock import AsyncMock, patch
+        from app.workflows.interview.nodes.ask_question import ask_question_node
+
+        mock_db = AsyncMock()
+        mock_repo = AsyncMock()
+        state = {"interview_id": 1, "current_index": 4, "questions": [{}] * 5}
+
+        with patch(
+            "app.workflows.interview.nodes.ask_question.interview_repo",
+            mock_repo,
+        ):
+            with pytest.raises(RuntimeError):
+                await ask_question_node(state, {"configurable": {"db": mock_db}})
+
+        mock_repo.update_question_index.assert_not_called()
+        mock_repo.create_message.assert_not_called()
+
+    async def test_advances_index_in_bounds(self):
+        from unittest.mock import AsyncMock, patch
+        from app.workflows.interview.nodes.ask_question import ask_question_node
+
+        mock_db = AsyncMock()
+        mock_repo = AsyncMock()
+        state = {
+            "interview_id": 1,
+            "current_index": 1,
+            "questions": [{"question": "Q0"}, {"question": "Q1"}, {"question": "Q2"}],
+        }
+
+        with patch(
+            "app.workflows.interview.nodes.ask_question.interview_repo",
+            mock_repo,
+        ):
+            result = await ask_question_node(state, {"configurable": {"db": mock_db}})
+
+        mock_repo.update_question_index.assert_called_once_with(mock_db, 1, 2)
+        assert result["current_index"] == 2
+        assert result["next_question"] == "Q2"
