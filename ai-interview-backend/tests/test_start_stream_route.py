@@ -37,6 +37,10 @@ class TestStartStreamRoute:
         assert resp.media_type == "text/event-stream"
         assert resp.headers["X-Accel-Buffering"] == "no"
 
+        # SSE 数据原样转发：body_iterator 产出的字符串与 service generator 完全一致
+        chunks = [s async for s in resp.body_iterator]
+        assert chunks == ["event: done\ndata: {}\n\n"]
+
     async def test_stream_false_returns_api_response(self):
         svc = SimpleNamespace(start_interview=AsyncMock(return_value={"interview_id": 1}))
         resp = await start_interview(
