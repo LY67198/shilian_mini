@@ -107,6 +107,13 @@ export async function submitAnswerStream(interviewId, answer, onChunk, onDone, s
     signal
   })
 
+  // 非 200（401/5xx 等非 SSE body）→ 流静默结束会让 onDone/onError 不触发、UI 卡死，
+  // 必须抛错由调用方 catch 统一兜底（错误前缀区别于 start 流程）
+  if (!response.ok) {
+    const detail = await response.text()
+    throw new Error(`提交回答失败 (HTTP ${response.status})${detail ? ': ' + detail : ''}`)
+  }
+
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
