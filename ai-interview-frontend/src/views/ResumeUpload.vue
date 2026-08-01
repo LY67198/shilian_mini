@@ -296,6 +296,7 @@ const streamedQuestions = ref([])
 const startTip = ref('')
 let startTipTimer = null
 let startProgressTimer = null
+let titleLocked = false   // 真实 status/题目标题锁定后，假动画阶段标题不再覆盖
 
 const startTips = [
   '深呼吸，保持冷静自信 💪',
@@ -328,7 +329,7 @@ function startStartingAnimation() {
     const stage = stages[stageIdx]
     if (startProgress.value < stage.target) {
       startProgress.value++
-      startingTitle.value = stage.title
+      if (!titleLocked) startingTitle.value = stage.title
       startProgressTimer = setTimeout(tick, stage.speed)
     } else {
       stageIdx++
@@ -348,6 +349,7 @@ async function handleStart() {
   starting.value = true
   step.value = 'starting'
   streamedQuestions.value = []
+  titleLocked = false
   startStartingAnimation()
 
   try {
@@ -358,10 +360,19 @@ async function handleStart() {
         difficulty: difficulty.value,
         total_questions: totalQuestions.value
       },
-      (msg) => { startingTitle.value = msg },
+      (msg) => {
+        // 真实 status 到达即锁定标题，假动画阶段标题不再覆盖
+        titleLocked = true
+        startingTitle.value = msg
+      },
       (questions) => {
         // onQuestion 每次回调携带"已完整解析的整组题目"，只在长度增长时更新，避免每个 token 都重渲染
         if (questions.length > streamedQuestions.value.length) {
+          // 首次解析出非空题目 → 锁定标题并切换到"生成中"文案（复用现有假标题）
+          if (streamedQuestions.value.length === 0 && questions.length > 0) {
+            titleLocked = true
+            startingTitle.value = 'AI 正在生成面试题目...'
+          }
           streamedQuestions.value = questions
         }
       },
