@@ -499,6 +499,7 @@ cd ai-interview-admin && npm run build       # → dist/
 
 > 三个话题按序处理。**topic 1 设计已完成（spec 已提交 dev），topic 2/3 待设计。** 实现全部留待下次会话执行。
 > 深度审计报告：`docs/superpowers/specs/2026-08-01-architecture-review-refactors-audit.md`（三话题代码事实、风险、推荐方案）。
+> **2026-08-01 下午 5 路并行代码审计已核实**（详见下方"审计核实问题清单"）：P0-1/P0-2 确认修复无回归；Topic 1/2/3 状态见各 Topic 的 ✅ 审计核实行；另新增 8 项发现（含 1 个 P1 越权问题）。
 
 **Topic 1：岗位匹配幂等修复（保留 Agent 不拆壳）** — 设计完成，待实现
 - Spec：`docs/superpowers/specs/2026-08-01-position-agent-interview-idempotency-design.md`（commit `c03d88a`）
@@ -506,11 +507,13 @@ cd ai-interview-admin && npm run build       # → dist/
 - 改动：`interview_repo.py` 新增 `get_active_by_position()`；`position_agent_tools.py` 的 `start_mock_interview` 创建前查已有 in_progress 面试 → 返回 `{existing: True, interview_id, ...}`
 - 幂等键 `(user_id, resume_id, target_position=title)`，无迁移、无 API/前端变更
 - 测试：新增 `tests/unit/test_position_agent_idempotency.py`（4 用例）
+- ✅ **审计核实（2026-08-01）**：实现未完成 — `start_mock_interview`（position_agent_tools.py:296）仍直接 `start_interview()` 无幂等检查；`get_active_by_position`（interview_repo.py:230）为死代码；现有测试只测 repo 方法（2 用例）未覆盖工具行为 → 虚假信心，需按 spec 补工具级用例
 
 **Topic 2：retrieval_check 降级纯函数** — 待设计
 - 把 `workflows/retrieval_check/` 的 StateGraph 折叠为普通 async while 循环（审计确认删 graph.py/state.py/nodes 脚手架 ~180 行）
 - 保留 `RetrievalCheckResult{final_context, debug_info}` 契约 + 2 个 YAML prompt（reason→rewrite-strategy 是真正价值）
 - 需精确复刻 4 个兜底语义：空结果 too_few / LLM check 失败 ok / rewrite 失败保原文 / max_retries=2 边界（3 检索轮 + 2 重写）
+- ✅ **审计核实（2026-08-01）**：StateGraph 未降级（graph.py:32 仍在）；两个 bug 均属实 — ① `is_first_call` 门控 bug（service.py:58,133-134 → retrieve_knowledge.py:31-34，HITL resume 后知识为空，**P1**）；② `debug_info` 被丢弃（retrieve_knowledge.py:40-42 只取 final_context）
 - 顺带：`is_first_call` 门控 bug（HITL resume 后后续问题知识注入为空）+ `debug_info` 被丢弃
 
 **Topic 3：死代码清理 5 项** — 待设计
@@ -519,3 +522,38 @@ cd ai-interview-admin && npm run build       # → dist/
 - `embed_text_sync` / `embed_texts_sync`（`app/llm/embedding.py`，含 `aembed_documents` 未 await 笔误）→ 删除，**必须同步改 `app/llm/__init__.py:14-15,25-26`**
 - `rerank.py:39` DashScope 同步 SDK 阻塞事件循环 → `asyncio.to_thread`（对比 pipeline.py:85 BM25 已卸线程）
 - 全部零调用者或 mock 覆盖，期望测试无改动
+- ✅ **审计核实（2026-08-01）**：5 项全部仍在；**新增第 3 个孤儿 prompt `question_agent.yaml`**（QuestionAgent 删除后残留）；`rerank` 属线上检索路径 → 升为 P1
+
+### 待办 — 2026-08-01 审计核实问题清单（下次执行）
+
+> 5 路并行审计（5 agents / 140 tool calls）+ 完整性补查，全部结论已对照当前代码验证。
+
+**P1 — 真正坏了，优先修：**
+- [ ] **越权注入候选消息（审计新发现）**：`submit_answer`（workflows/interview/service.py:41-48）先写 InterviewMessage 后校验归属；`/{interview_id}/answer` 端点（api/client/v1/interview.py:47-64）写前不校验 → 任意登录用户可向他人面试注入消息，随后报 500 而非 404/403。修法：submit_answer 开头先 `get_by_id_for_user` 校验归属 + status=in_progress
+- [ ] **知识注入只有第 1 题有**：`is_first_call` 门控 bug（见 Topic 2）— HITL resume 后每轮知识为空。修法：不按 is_first_call 门控，无条件构建 RetrievalCheckService（BM25 已预热成本低）或移到 node 内 lazy singleton
+- [ ] **rerank 阻塞事件循环（线上路径）**：rerank.py:39-44 同步 `TextReRank.call` 在 async 函数内未卸线程（单 worker 2GB 部署）。修法：`await asyncio.to_thread(TextReRank.call, ...)`
+- [ ] **start_mock_interview 无幂等检查**：见 Topic 1 — position_agent_tools.py:296 按 spec 接线 `get_active_by_position` + 返回 `{existing: True, ...}`
+
+**P2 — 潜在 bug / 已记录待办：**
+- [ ] **面试末尾索引越界（审计新发现）**：`check_finished.py:16-19` 用 `total_questions` 判断结束、遍历用 `len(questions_data)`；LLM 出题不足时 `ask_question.py:33-40` **先**把 DB `current_question_index` 写越界再抛 RuntimeError → 面试记录损坏。修法：终止判断改用 `len(questions)`（或启动时 clamp `total_questions`）+ 越界先校验再写库
+- [ ] **evaluate `db.commit()` 吞异常**：evaluate.py:89-119 裸 try/except 只 log，提交失败静默返回成功 → P0-1 模式可从错误路径复活。修法：失败给 state 打标记或重抛
+- [ ] **每道题 feedback 未进报告**：generate_report.py:87-90 硬编码 `'feedback': ''`（前代已有；DB 已存 feedback 但 get_scored_messages→qa_data 丢弃；前端 Report.vue 暂不渲染故不可见）
+- [ ] **报告分数回退泄漏末题分数**：generate_report.py:42-54 `m else state.get('score', 0)` → 无评分消息的题目套用最后一题分数抬高总分。修法：回退 0.0 或标记未评分
+- [ ] **debug_info 被丢弃**：见 Topic 2 — 自检循环零可观测性
+- [ ] **幂等测试虚假信心**：见 Topic 1 — 只测 repo 不测工具
+- [ ] **死代码 6 项**：见 Topic 3 — 5 项 + `question_agent.yaml` 孤儿
+
+**info — 清理/可观测性（审计新发现）：**
+- [ ] `close_checkpointer()`（_shared/checkpointer.py:44）lifespan 关闭时未调用，AsyncPostgresSaver 连接池泄漏
+- [ ] `position_agent_system.yaml:7-13` 只列 4 工具，`start_mock_interview` 不在 prompt → LLM 结构上调不到它（"5 工具链"名不副实，实际 4 工具链；重复建面试风险面只在 /start-interview 端点）
+- [ ] `build_candidate_profile`（position_agent_tools.py:83-112）Python 内硬编码大段 prompt，违反硬性规则 → 移 YAML
+- [ ] `extract_json`（json_utils.py:33）可能返回数组 → 纯 AI 兜底路径 `q.setdefault` AttributeError → 500
+- [ ] prompt 污染：当前答案在 `{answer}` 与 `{history_text}`（chat_history[-6:] 含刚提交的答案）各出现一次
+- [ ] BM25-only 命中无 metadata（pipeline.py:88-96）→ question_bank 纯 BM25 召回时 reference_answer 为空
+
+**✅ 已确认无回归（2026-08-01 重构/修复）：**
+- `app/agents/` 删除后全仓库无残留 import（仅 3 处 YAML 注释命中），无 ImportError 风险
+- graph 编译正常（6 nodes + AsyncPostgresSaver + interrupt_after=['ask_question']）
+- `load_prompt('evaluator_agent'/'report_agent')` 模板变量与调用点一一匹配
+- BM25 id/语料对齐正确、空语料/get_text 越界安全、lifespan try/except 降级 vector-only
+- `current_index` → `question_index` 索引链在 HITL resume 轮间一致
