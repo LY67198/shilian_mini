@@ -1,0 +1,92 @@
+"""RAG + Agent 全真链路集成测试（需真实 API + 种子数据）
+
+运行：
+  docker exec -e RUN_FULL_CHAIN=1 shilian-app \
+    pytest tests/test_full_chain_integration.py -v
+
+注意：消耗真实 token（embedding + rerank + DeepSeek LLM）。
+"""
+import os
+
+import pytest
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not os.environ.get("RUN_FULL_CHAIN"),
+        reason="需 RUN_FULL_CHAIN=1 才运行全真链路测试",
+    ),
+]
+
+
+@pytest.fixture(autouse=True)
+async def _ensure_bm25_indices():
+    """确保 BM25 全局单例已构建。
+
+    BM25 索引由 app lifespan 构建，但 pytest 进程不执行 lifespan，
+    因此测试前需手动构建（只读 DB，无 API 消耗；已构建则跳过）。
+    """
+    from app.retrieval.bm25_lifecycle import (
+        build_bm25_indices,
+        get_knowledge_bm25,
+        get_question_bank_bm25,
+    )
+
+    if get_knowledge_bm25() is None or get_question_bank_bm25() is None:
+        from app.db.base import get_session_local
+
+        async with get_session_local()() as session:
+            await build_bm25_indices(session)
+    yield
+
+
+@pytest.mark.asyncio
+class TestRagFullPipeline:
+    """RetrievalPipeline.search 完整混合检索链路（vector + BM25 + RRF + rerank）"""
+
+    async def test_knowledge_hybrid_search(self):
+        from app.db.base import get_session_local
+        from app.retrieval.bm25_lifecycle import get_knowledge_bm25
+        from app.retrieval.pipeline import RetrievalPipeline
+
+        assert get_knowledge_bm25() is not None, "BM25 索引未构建（lifespan 未执行？）"
+        async with get_session_local()() as session:
+            pipeline = RetrievalPipeline(
+                session=session,
+                collection="knowledge_chunks",
+                bm25_index=get_knowledge_bm25(),
+                final_top_k=5,
+                enable_rerank=True,
+            )
+            results = await pipeline.search("Python GIL 是什么")
+            assert results, "知识库检索不应为空"
+            assert len(results) <= 5
+            for r in results:
+                assert r.id > 0
+                assert r.content
+                assert r.source in {"vector", "bm25", "both"}
+                assert r.score > 0
+            scores = [r.score for r in results]
+            assert scores == sorted(scores, reverse=True)
+
+    async def test_question_bank_hybrid_search_with_filters(self):
+        from app.db.base import get_session_local
+        from app.retrieval.bm25_lifecycle import get_question_bank_bm25
+        from app.retrieval.pipeline import RetrievalPipeline
+
+        assert get_question_bank_bm25() is not None
+        async with get_session_local()() as session:
+            pipeline = RetrievalPipeline(
+                session=session,
+                collection="question_bank",
+                bm25_index=get_question_bank_bm25(),
+                final_top_k=8,
+                enable_rerank=True,
+            )
+            results = await pipeline.search(
+                "Python 异步编程",
+                filters={"position_tag": "python_backend", "difficulty": "medium", "min_score": 0.7},
+            )
+            assert results, "题库检索不应为空"
+            for r in results:
+                assert r.metadata, "题库结果应携带 metadata（reference_answer 等）"
