@@ -61,3 +61,29 @@ def extract_json(text: str) -> dict:
         "feedback": raw_text[:200],
         "parse_failed": True,
     }
+
+
+def try_parse_partial_array(text: str) -> list | None:
+    """增量解析 JSON 数组：能解出多少就解出多少（SSE 流式出题用）。
+
+    规则：
+    - 空 / 空白 → None
+    - 完整数组 → 完整解析（校验是 list）
+    - 缺右括号但已有元素完整 → 补右括号提前解出已完整对象
+    - 末尾元素不完整 / 非数组 → None
+    """
+    trimmed = text.strip()
+    if not trimmed:
+        return None
+    try:
+        parsed = json.loads(trimmed)
+        return parsed if isinstance(parsed, list) else None
+    except json.JSONDecodeError:
+        pass
+    if trimmed.endswith("]"):
+        return None
+    try:
+        parsed = json.loads(trimmed + "]")
+        return parsed if isinstance(parsed, list) else None
+    except json.JSONDecodeError:
+        return None
