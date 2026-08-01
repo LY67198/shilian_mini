@@ -51,6 +51,14 @@ async def cross_encoder_rerank(
         )
         return candidates[:top_k]
 
+    # 非 200 响应（如 403 AccessDenied）不抛异常，需显式检查避免崩溃
+    if resp.status_code != 200 or not resp.output or not resp.output.results:
+        logger.warning(
+            "DashScope rerank returned status=%s, falling back to original order",
+            resp.status_code,
+        )
+        return candidates[:top_k]
+
     # Build index lookup into original candidates
     reranked: list[SearchResult] = []
     for result in resp.output.results:

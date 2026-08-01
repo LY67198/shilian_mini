@@ -130,7 +130,7 @@ class Settings(BaseSettings):
     QUESTION_BANK_TOP_K: int = 20
 
     # ============= Phase 3: Hybrid Retrieval =============
-    DASHSCOPE_RERANK_MODEL: str = "gte-rerank"
+    DASHSCOPE_RERANK_MODEL: str = "gte-rerank-v2"
     RRF_K: int = 60
     BM25_TOP_K: int = 20
     VECTOR_TOP_K: int = 20

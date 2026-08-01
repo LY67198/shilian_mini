@@ -218,6 +218,7 @@ class TestRerank:
             @staticmethod
             def call(**kwargs):
                 resp = type("R", (), {})()
+                resp.status_code = 200
                 resp.output = type("O", (), {})()
                 resp.output.results = [MockResult(2, 0.98), MockResult(0, 0.85), MockResult(1, 0.40)]
                 return resp
@@ -243,6 +244,30 @@ class TestRerank:
         result = await cross_encoder_rerank(query="test", candidates=candidates, top_k=1)
         assert len(result) == 1
         assert result[0].id == 1
+
+    async def test_fallback_on_non_200_response(self, monkeypatch):
+        """403 AccessDenied（output=None）应 fallback，不 AttributeError 崩溃"""
+        from app.retrieval.rerank import cross_encoder_rerank
+        from app.retrieval import SearchResult
+        candidates = [
+            SearchResult(id=1, content="doc A", score=0.9, source="both"),
+            SearchResult(id=2, content="doc B", score=0.8, source="both"),
+        ]
+
+        class ForbiddenReRank:
+            @staticmethod
+            def call(**kwargs):
+                resp = type("R", (), {})()
+                resp.status_code = 403
+                resp.output = None
+                return resp
+
+        monkeypatch.setattr("app.retrieval.rerank.TextReRank", ForbiddenReRank)
+        result = await cross_encoder_rerank(query="test", candidates=candidates, top_k=2)
+        assert len(result) == 2
+        # fallback 保持原顺序
+        assert result[0].id == 1
+        assert result[1].id == 2
 
 
 @pytest.mark.unit
