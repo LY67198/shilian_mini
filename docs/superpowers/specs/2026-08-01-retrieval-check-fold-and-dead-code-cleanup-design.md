@@ -173,7 +173,8 @@ resp = await asyncio.to_thread(
 | 3 | rewrite 失败保原文 | mock `_rewrite_query` 抛异常 → `current_query` 保持原文，retry_count 自增 |
 | 4 | **max_retries=2 边界** | mock check 恒 insufficient → **恰好 3 检索轮 + 2 重写**，最终走 format |
 | 5 | format 去重 + 排序 | 两轮含重复 content[:100] → 去重后唯一，score 降序 |
-| 6 | pipeline 异常 | mock search 抛异常 → 空 `final_context` + `debug_info.error` |
+| 6 | pipeline 异常按轮吸收 | mock search 抛异常 → 结果按轮吸收为空，走满循环，`final_context=[]`，**无** `error` 键（与原 retrieve_node 吸收行为一致）|
+| 6b | format 阶段意外异常 | mock `_format_context` 抛异常 → 外层兜底 `final_context=[]` + `debug_info.error` |
 | 7 | debug_info 完整 | `rounds` / `final_query` / `total_retrieval_rounds` / `total_unique_results` / `retry_count` 字段齐全 |
 
 （LLM 依赖沿用原测试的 monkeypatch 手法 mock `get_chat_llm` / `load_prompt`，不联网）
