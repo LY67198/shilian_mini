@@ -44,7 +44,7 @@ def _build_retrieval_query(target_position: str, parsed_resume: dict) -> str:
 class InterviewService:
     """面试服务 — 启动面试、RAG 出题、获取评估报告和面试记录管理。"""
 
-    async def _generate_questions_with_rag(
+    async def _prepare_questions(
         self,
         db: AsyncSession,
         parsed_resume: dict,
@@ -52,19 +52,10 @@ class InterviewService:
         difficulty: str,
         total_questions: int,
     ) -> list:
-        """Phase 3 RAG 出题：使用 RetrievalPipeline（vector + BM25 + RRF + rerank）。
+        """RAG 混合检索，返回候选题目 dict 列表（可能为空）。
 
-        优先级：hybrid recall → AI select → AI seed → pure AI generate。
-
-        Args:
-            db: 数据库会话。
-            parsed_resume: 解析后的简历 JSON 字典。
-            target_position: 目标岗位标签。
-            difficulty: 难度等级（easy / medium / hard）。
-            total_questions: 期望生成的题目数量。
-
-        Returns:
-            最终题目列表，每题包含 question / reference_answer / key_points / bank_id 等字段。
+        供流式 start_interview_stream 与非流式 _generate_questions_with_rag 共用。
+        分支选择（select / seed / generate）由调用方按 len(candidates) 判定。
         """
         from app.retrieval.bm25_lifecycle import get_question_bank_bm25
         from app.retrieval.pipeline import RetrievalPipeline
@@ -155,6 +146,38 @@ class InterviewService:
         except Exception as e:
             logger.error(f"[RAG出题] Hybrid retrieval failed, falling back to pure AI: {e}")
             candidates = []
+
+        return candidates
+
+    async def _generate_questions_with_rag(
+        self,
+        db: AsyncSession,
+        parsed_resume: dict,
+        target_position: str,
+        difficulty: str,
+        total_questions: int,
+    ) -> list:
+        """Phase 3 RAG 出题：使用 RetrievalPipeline（vector + BM25 + RRF + rerank）。
+
+        优先级：hybrid recall → AI select → AI seed → pure AI generate。
+
+        Args:
+            db: 数据库会话。
+            parsed_resume: 解析后的简历 JSON 字典。
+            target_position: 目标岗位标签。
+            difficulty: 难度等级（easy / medium / hard）。
+            total_questions: 期望生成的题目数量。
+
+        Returns:
+            最终题目列表，每题包含 question / reference_answer / key_points / bank_id 等字段。
+        """
+        candidates = await self._prepare_questions(
+            db=db,
+            parsed_resume=parsed_resume,
+            target_position=target_position,
+            difficulty=difficulty,
+            total_questions=total_questions,
+        )
 
         cnt = len(candidates)
         logger.info(f"[RAG出题] Hybrid recall: {cnt} questions, target: {total_questions}")
