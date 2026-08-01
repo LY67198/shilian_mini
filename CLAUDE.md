@@ -251,7 +251,7 @@ cd ai-interview-admin && npm run build       # → dist/
 - **Phase 5（2026-07-22）：Milvus→pgvector 迁移完成**（20 commits，pymilvus 移除，MilvusClient→AsyncSession，pgvector HNSW 索引）
 - **Service 层全部迁 pgvector**（knowledge_service / question_bank_service / interview_service / eval_ragas.py）
 - 端到端验证：创建题目 → pgvector 向量召回命中 ✅
-- 两套 RAG：题库 RAG（vector-only 已接入面试流程）+ 知识库 RAG（技术链路已实现，但 **BM25 从未构建 → 混合检索未激活**，知识注入实际为空，见下方"已知技术债 P0-2"）
+- 两套 RAG：题库 RAG + 知识库 RAG，混合检索（vector + BM25 → RRF → rerank）已在 lifespan 启动时自动构建 BM25 索引并激活（**2026-08-01 P0-2 已修复**，Knowledge 32 文档 / QuestionBank 84 文档）
 - 岗位匹配 Agent 5 个工具链：`get_parsed_resume → build_candidate_profile → match_positions → get_position_interview_focus → start_mock_interview`
 - LangChain 升级完成 (0.3.x → 1.x)：`create_agent()` 重写，`openai` 升级 2.x
 - **LangGraph 1.2.8 + langgraph-checkpoint-postgres 3.1.0 已装**（PostgresSaver 持久化 LangGraph state）
@@ -269,6 +269,7 @@ cd ai-interview-admin && npm run build       # → dist/
 - **技术债清理**（2026-07-11）：一次性解决 12 项已知技术债，10 项已修 / 2 项跳过，净删 ~500 行，测试 32/32 pass
 - **代码文档化**（2026-07-11）：核心模块 53 个文件全部补全 Google 风格中文 docstring（Args:/Returns:），~49 处新增
 - **项目文档更新**（2026-07-11）：工程化能力.md / 面试要点.md / 项目RAG实现原理.md / AI面试项目问答清单.md / AI应用工程化能力.md / 部署教程.md 6 份文档同步到 Phase 4 状态
+- **P0 Critical Bug 修复**（2026-08-01）：P0-1（报告评分写回 DB）+ P0-2（BM25 索引构建 + PG id 修复），6 commits / 6 files / +263 -86，35/35 unit tests pass，smoke test 验证 BM25 Knowledge 32 + QuestionBank 84 文档已构建、search 返回 PG 主键。详见 `docs/superpowers/specs/2026-08-01-p0-critical-bugs-design.md`
 - **部署文档**（2026-07-22）：`docs/零基础部署教程.md`（1018 行覆盖 Part 0 概念 → Part 12 日常运维，含 8 个实战坑 + 加功能改代码完整流程）+ `docs/部署runbook-2gb单机.md`（运维 runbook），均为本地 gitignore 保护
 - **首次云端部署完成**（2026-07-22）：阿里云 ECS（Ubuntu 22.04 / 2 vCPU / 2 GiB / 40 GiB / 3 Mbps）跑通完整 4 容器 lite 栈，`http://123.56.239.7/` 已可访问；域名 `shilian.asia` 已解析但因未 ICP 备案被阿里云拦截入口（**临时方案**：用 IP 访问；备案下来后改回域名）
 - **部署实战 6 项修复**（2026-07-22）：
@@ -404,14 +405,9 @@ cd ai-interview-admin && npm run build       # → dist/
 
 ### 已知技术债（2026-08-01 更新）
 
-**P0（2026-08-01 架构评审发现，详见下方"架构评审记录"）**：
-- [ ] **P0-1 面试报告评分事实性错误**：evaluate 节点从不把 score/feedback 写回 `InterviewMessage`（全仓库只有 create、无 update），`generate_report` 的 `get_scored_messages()`（过滤 `score IS NOT NULL`）恒为空 → **报告里每道题分数都是最后一题分数、除最后一题外答案全是"未回答"**。Phase 2 重构把旧 ai_service 写分到消息的环节弄丢了。修复：evaluate 节点把评分写回对应消息（并给 candidate 消息正确的 `question_index`）
-  - 📋 **设计已完成**：`docs/superpowers/specs/2026-08-01-p0-critical-bugs-design.md`
-  - 📋 **实施计划已完成**：`docs/superpowers/plans/2026-08-01-p0-critical-bugs-implementation.md`（Task 5-6，evaluate_node 写回 DB + 测试）
-- [ ] **P0-2 BM25 索引从未构建，混合检索生产静默关闭**：`build_bm25_indices` 全仓库只有定义、**零调用**，lifespan 未挂 → `get_question_bank_bm25()/get_knowledge_bm25()` 恒 None，题库永远走 vector-only 兜底，retrieve_knowledge 节点注入空知识。且 BM25 结果用语料下标当 id（非 PG 主键），RRF 按 id 融合必然失效（同一文档两个 id、"both" 永不触发）。修复：lifespan 挂构建 + BM25 语料存 `(pg_id, text)` 对
-  - 📋 **设计已完成**：`docs/superpowers/specs/2026-08-01-p0-critical-bugs-design.md`
-  - 📋 **实施计划已完成**：`docs/superpowers/plans/2026-08-01-p0-critical-bugs-implementation.md`（Task 1-4，BM25Index 重构 + lifespan 集成 + 测试）
-  - ⚠️ **待执行**：下次会话按 plan 实施，7 个 Task、4 个文件改动
+**P0（2026-08-01 架构评审发现，**已于 2026-08-01 修复**）**：
+- [x] **P0-1 面试报告评分事实性错误**：evaluate 节点从不把 score/feedback 写回 `InterviewMessage` → `generate_report` 的 `get_scored_messages()` 恒为空 → 报告里每道题分数都是最后一题分数、除最后一题外答案全是"未回答"。**修复**：evaluate_node 评分后将 score/feedback/question_index 写回最新未评分的 candidate 消息（6d63ce6..9175eb7，6 commits）。
+- [x] **P0-2 BM25 索引从未构建，混合检索生产静默关闭**：`build_bm25_indices` 全仓库只有定义、**零调用**，lifespan 未挂 → 题库永远走 vector-only 兜底，retrieve_knowledge 节点注入空知识。BM25 结果用语料下标当 id（非 PG 主键），RRF 按 id 融合必然失效。**修复**：lifespan 挂构建 + BM25Index 存 `(pg_id, text)` 对 + search 返回 PG 主键（6d63ce6..9175eb7，6 commits）。
 
 **其余已知**：
 - [ ] 自定义分页器 Paginator — 跳过（替换 fastapi-pagination 会破坏 API 格式）
@@ -468,7 +464,7 @@ cd ai-interview-admin && npm run build       # → dist/
 **Agent / Workflow / 普通函数 名实对照**：
 | 模块 | 代码事实 | 判定 |
 |---|---|---|
-| 面试 StateGraph（`workflows/interview/`） | 6 节点 + `interrupt_after=["ask_question"]` HITL + AsyncPostgresSaver + SSE | ✅ 用对（但带 P0-1 报告 bug） |
+| 面试 StateGraph（`workflows/interview/`） | 6 节点 + `interrupt_after=["ask_question"]` HITL + AsyncPostgresSaver + SSE | ✅ 用对（P0-1 评分写回 DB 已于 2026-08-01 修复） |
 | RAG 管线（`retrieval/pipeline.py`） | 确定性四阶段（vector+BM25+RRF+rerank），普通 Python | ✅ 用对（不该套 graph） |
 | 岗位匹配 `create_agent`（`position_agent_service.py:52`） | 唯一真·工具调用 Agent，但 prompt 锁死"严格按此顺序调用工具/不要跳过步骤"（position_agent_system.yaml:7,17） | ⚠️ 固定 DAG 伪装成 Agent |
 | retrieval_check StateGraph（`workflows/retrieval_check/`） | "最多重写 2 次"的有界循环，无 checkpointer/无流式/无 HITL；由 retrieve_knowledge_node 以 `graph.ainvoke()` 命令式嵌套触发，断 trace | ⚠️ 过度设计（~20 行 while 即可），唯一价值是 retry_reason 反馈闭环 |
@@ -489,13 +485,12 @@ cd ai-interview-admin && npm run build       # → dist/
 - position_agent 的 `start_mock_interview` 是写 DB 的副作用工具却挂在工具集里，LLM 可在任意时机重复调用（重复建面试风险）
 - 岗位匹配改造二选一：**路线 A** 删掉 prompt 顺序约束、让 LLM 真决策（工具加前置校验）；**路线 B** 拆成显式边 LangGraph StateGraph 或普通 async 顺序调用（最诚实，面试话术见"项目介绍"相关章节）
 
-**修复路线（按优先级）**：P0-1 报告评分 → P0-2 BM25 构建 → 岗位匹配拆 Agent 壳 → retrieval_check 降级纯函数 → 清剩余死代码（get_workflow_llm / DEFAULT_TOOLS / 孤儿 prompts / aembed_documents）。
+**修复路线（按优先级）**：~~P0-1 报告评分 → P0-2 BM25 构建~~ ✅ 已完成（2026-08-01）→ 岗位匹配拆 Agent 壳 → retrieval_check 降级纯函数 → 清剩余死代码（get_workflow_llm / DEFAULT_TOOLS / 孤儿 prompts / aembed_documents）。
 
 **2026-08-01 已修复**：`app/agents/` 删除 + 逻辑内联（EvaluatorAgent → evaluate_node, ReportAgent → generate_report_node）+ `extract_json` 改 `with_structured_output(ReportResult)`。
 
-**2026-08-01 P0 Bug 修复 — 设计与计划阶段**（代码改动待下次会话执行）：
-- 完成 Brainstorming → Design → Writing-Plans 全流程
+**2026-08-01 P0 Bug 修复 — 已完成**（6 commits / 6 files / +263 -86）：
 - 设计文档：`docs/superpowers/specs/2026-08-01-p0-critical-bugs-design.md`
 - 实施计划：`docs/superpowers/plans/2026-08-01-p0-critical-bugs-implementation.md`（7 Tasks / 4 files）
-- 范围：P0-1（报告评分写回 DB）+ P0-2（BM25 索引构建 + PG id 修复）
-- 执行方式：Subagent-Driven（推荐，每 Task 独立 subagent + review）
+- 执行方式：Subagent-Driven Development
+- 验证：35/35 unit tests pass + smoke test（BM25 32+84 文档，search 返回 PG 主键）
