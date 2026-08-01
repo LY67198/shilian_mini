@@ -94,15 +94,34 @@ class TestBM25Index:
     def test_build_and_search(self):
         from app.retrieval.bm25 import BM25Index
         idx = BM25Index("test")
-        idx.build(["Python async programming guide", "Java concurrency patterns", "Python web framework Django"])
+        idx.build([(10, "Python async programming guide"), (20, "Java concurrency patterns"), (30, "Python web framework Django")])
         results = idx.search("python async", top_k=2)
         assert len(results) == 2
-        assert "Python async" in idx._corpus[results[0][0]]
+        # results are (pg_id, score) — first result should be id=10 (best match)
+        pg_ids = [r[0] for r in results]
+        assert 10 in pg_ids
 
     def test_empty_corpus_returns_empty(self):
         from app.retrieval.bm25 import BM25Index
         idx = BM25Index("empty")
         assert idx.search("query", top_k=5) == []
+
+    def test_build_none_clears_index(self):
+        from app.retrieval.bm25 import BM25Index
+        idx = BM25Index("test")
+        idx.build([(1, "some text")])
+        assert idx.corpus_size == 1
+        idx.build(None)
+        assert idx.corpus_size == 0
+        assert idx.search("text") == []
+
+    def test_get_text_by_pg_id(self):
+        from app.retrieval.bm25 import BM25Index
+        idx = BM25Index("test")
+        idx.build([(42, "hello world"), (99, "goodbye")])
+        assert idx.get_text(42) == "hello world"
+        assert idx.get_text(99) == "goodbye"
+        assert idx.get_text(999) == ""  # not found
 
     def test_tokenize_bigrams(self):
         from app.retrieval.bm25 import BM25Index
@@ -203,7 +222,7 @@ class TestRetrievalPipeline:
         from app.retrieval.bm25 import BM25Index
         from app.retrieval import SearchResult
         bm25 = BM25Index("test")
-        bm25.build(["doc one", "doc two", "doc three"])
+        bm25.build([(1, "doc one"), (2, "doc two"), (3, "doc three")])
         pipeline = RetrievalPipeline(client=None, collection="knowledge_chunks", bm25_index=bm25, vector_top_k=3, bm25_top_k=3, final_top_k=2, enable_rerank=True)
 
         call_order = []
@@ -227,7 +246,7 @@ class TestRetrievalPipeline:
         from app.retrieval.bm25 import BM25Index
         from app.retrieval import SearchResult
         bm25 = BM25Index("test")
-        bm25.build(["doc one", "doc two"])
+        bm25.build([(1, "doc one"), (2, "doc two")])
         pipeline = RetrievalPipeline(client=None, collection="knowledge_chunks", bm25_index=bm25, enable_rerank=False, final_top_k=4)
 
         async def mock_vector(client, query, collection, top_k, filters=None):
