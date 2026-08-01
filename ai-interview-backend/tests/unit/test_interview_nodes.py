@@ -74,27 +74,14 @@ class TestInterviewState:
 
 @pytest.mark.unit
 class TestEvaluateNode:
-    """evaluate_node — 委托 EvaluatorAgent，需 mock agent"""
-
-    @staticmethod
-    def _mock_agent(score=7.5, feedback="回答良好"):
-        """创建 mock EvaluatorAgent，返回指定 ScoreResult"""
-        from app.workflows.interview.state import ScoreResult
-
-        class MockAgent:
-            async def evaluate(self, **kwargs):
-                return ScoreResult(score=score, feedback=feedback)
-        return MockAgent()
+    """evaluate_node — 使用 prompt | llm.with_structured_output(ScoreResult) 评分，需 mock LLM"""
 
     async def test_returns_score_and_feedback(self):
-        """验证 evaluate_node 通过 config.configurable.evaluator_agent 获取 agent 并返回 score + feedback"""
+        """evaluate_node returns score + feedback from structured output"""
+        from unittest.mock import AsyncMock, MagicMock, patch
         from app.workflows.interview.nodes.evaluate import evaluate_node
+        from app.workflows.interview.state import ScoreResult
 
-        config = {
-            "configurable": {
-                "evaluator_agent": self._mock_agent(score=7.5, feedback="回答良好"),
-            },
-        }
         state = {
             "current_question": "请介绍 Python 的 GIL",
             "answer": "GIL 是全局解释器锁...",
@@ -104,12 +91,79 @@ class TestEvaluateNode:
             "interview_id": 1,
             "user_id": 42,
         }
-        result = await evaluate_node(state, config)
+
+        chain = AsyncMock()
+        chain.ainvoke.return_value = ScoreResult(score=7.5, feedback="回答良好")
+        mock_prompt = type("MockPrompt", (), {"__or__": lambda self, other: chain})()
+
+        # Mock DB: return an unscored candidate message
+        mock_msg = MagicMock()
+        mock_msg.score = None
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_msg
+        mock_db = AsyncMock()
+        mock_db.execute.return_value = mock_result
+
+        with patch(
+            "app.workflows.interview.nodes.evaluate.load_prompt",
+            return_value=mock_prompt,
+        ), patch(
+            "app.workflows.interview.nodes.evaluate.get_chat_llm"
+        ) as mock_get_llm:
+            mock_get_llm.return_value.with_structured_output.return_value = object()
+            result = await evaluate_node(state, {"configurable": {"db": mock_db}})
+
         assert result["score"] == 7.5
         assert result["feedback"] == "回答良好"
+        # Verify score was written to the message
+        assert mock_msg.score == 7.5
+        assert mock_msg.feedback == "回答良好"
+        mock_db.commit.assert_called_once()
 
-    async def test_fallback_when_agent_not_in_config(self):
-        """agent 不在 config 时使用默认 EvaluatorAgent（无外部依赖则不测 LLM 调用）"""
+    async def test_persists_score_to_db_message(self):
+        """evaluate_node updates the latest unscored candidate message with score+feedback+question_index"""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from app.workflows.interview.nodes.evaluate import evaluate_node
+        from app.workflows.interview.state import ScoreResult
+
+        state = {
+            "current_question": "What is dependency injection?",
+            "answer": "DI is a pattern where...",
+            "resume_context": {},
+            "chat_history": [],
+            "knowledge_context": [],
+            "interview_id": 5,
+            "current_index": 2,
+        }
+
+        chain = AsyncMock()
+        chain.ainvoke.return_value = ScoreResult(score=9.0, feedback="Excellent")
+        mock_prompt = type("MockPrompt", (), {"__or__": lambda self, other: chain})()
+
+        mock_msg = MagicMock()
+        mock_msg.score = None
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_msg
+        mock_db = AsyncMock()
+        mock_db.execute.return_value = mock_result
+
+        with patch(
+            "app.workflows.interview.nodes.evaluate.load_prompt",
+            return_value=mock_prompt,
+        ), patch(
+            "app.workflows.interview.nodes.evaluate.get_chat_llm"
+        ) as mock_get_llm:
+            mock_get_llm.return_value.with_structured_output.return_value = object()
+            await evaluate_node(state, {"configurable": {"db": mock_db}})
+
+        assert mock_msg.score == 9.0
+        assert mock_msg.feedback == "Excellent"
+        assert mock_msg.question_index == 2
+        mock_db.commit.assert_called_once()
+
+    async def test_fallback_on_llm_failure(self):
+        """LLM failure returns fallback score=5.0, does not attempt DB write"""
+        from unittest.mock import AsyncMock, MagicMock, patch
         from app.workflows.interview.nodes.evaluate import evaluate_node
 
         state = {
@@ -120,22 +174,20 @@ class TestEvaluateNode:
             "knowledge_context": [],
             "interview_id": 1,
             "user_id": 42,
-            # 未注入 evaluator_agent — 节点应创建默认实例
         }
-        # 默认 EvaluatorAgent 会尝试调用 LLM，此处只验证 agent 可成功创建并传入参数
-        # 因此我们 mock agent.evaluate 避免真实 LLM 调用
-        from unittest.mock import AsyncMock, patch
-        from app.workflows.interview.state import ScoreResult
 
-        with patch.object(
-            __import__("app.agents.evaluator_agent", fromlist=["EvaluatorAgent"]).EvaluatorAgent,
-            "evaluate",
-            new_callable=AsyncMock,
-            return_value=ScoreResult(score=5.0, feedback="评分异常，已记录"),
+        mock_db = AsyncMock()
+
+        with patch(
+            "app.workflows.interview.nodes.evaluate.get_chat_llm",
+            side_effect=RuntimeError("LLM unavailable"),
         ):
-            result = await evaluate_node(state, {"configurable": {}})
+            result = await evaluate_node(state, {"configurable": {"db": mock_db}})
+
         assert result["score"] == 5.0
         assert "评分异常" in result["feedback"]
+        # DB must NOT be called when LLM fails (early return before DB write)
+        mock_db.execute.assert_not_called()
 
 
 @pytest.mark.unit
