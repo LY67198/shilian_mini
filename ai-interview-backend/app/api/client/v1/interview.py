@@ -48,11 +48,33 @@ async def _assert_owned_active(
 @router.post("/start")
 async def start_interview(
     data: InterviewStart,
+    stream: bool = Query(default=False, description="是否使用 SSE 流式出题"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     interview_service: InterviewService = Depends(get_interview_service),
 ):
-    """开始新的 AI 面试会话"""
+    """开始新的 AI 面试会话（?stream=true 走 SSE 流式出题）"""
+    if stream:
+        async def event_generator():
+            async for sse_str in interview_service.start_interview_stream(
+                db=db,
+                user_id=current_user.id,
+                resume_id=data.resume_id,
+                target_position=data.target_position,
+                difficulty=data.difficulty,
+                total_questions=data.total_questions,
+            ):
+                yield sse_str
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
     result = await interview_service.start_interview(
         db=db,
         user_id=current_user.id,
