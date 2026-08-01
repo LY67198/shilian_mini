@@ -5,6 +5,85 @@ export function startInterview(data) {
   return api.post('/interviews/start', data, { timeout: 180000 })
 }
 
+export async function startInterviewStream(data, onStatus, onQuestion, onDone, signal) {
+  const authStore = (await import('../stores/auth')).useAuthStore()
+  const response = await fetch('/api/v1/interviews/start?stream=true', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${authStore.token}`
+    },
+    body: JSON.stringify(data),
+    signal
+  })
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let lineBuffer = ''      // SSE 行拆分缓冲
+  let jsonBuffer = ''      // JSON 增量累积缓冲（LLM 输出原文）
+  let currentEvent = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      lineBuffer += decoder.decode(value, { stream: true })
+
+      const lines = lineBuffer.split('\n')
+      lineBuffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (line === '') {
+          currentEvent = ''
+          continue
+        }
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6))
+            switch (currentEvent) {
+              case 'status':
+                onStatus(data.message)
+                break
+              case 'chunk':
+                jsonBuffer += data.content
+                const parsed = tryParseQuestions(jsonBuffer)
+                if (parsed && parsed.length) onQuestion(parsed)
+                break
+              case 'error':
+                throw new Error(data.message || data.error || 'Unknown error')
+              case 'done':
+                onDone(data)
+                break
+            }
+          } catch (e) {
+            if (e.message !== 'Unexpected end of JSON input') throw e
+          }
+        }
+      }
+    }
+  } finally {
+    try { reader.releaseLock() } catch (_) {}
+  }
+}
+
+function tryParseQuestions(buffer) {
+  const trimmed = buffer.trim()
+  if (!trimmed) return null
+  try {
+    const arr = JSON.parse(trimmed)
+    return Array.isArray(arr) ? arr : null
+  } catch (_) {}
+  if (trimmed.endsWith(']')) return null
+  try {
+    const arr = JSON.parse(trimmed + ']')   // 补右括号提前解出已完整对象
+    return Array.isArray(arr) ? arr : null
+  } catch (_) {
+    return null                              // 末尾对象未闭合 → 保留上次结果
+  }
+}
+
 export function submitAnswer(interviewId, answer) {
   return api.post(`/interviews/${interviewId}/answer`, { answer })
 }
