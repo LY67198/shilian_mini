@@ -183,38 +183,35 @@ cd ai-interview-admin && npm install && npm run dev        # 本地 → 3001；�
 
 ## 当前状态
 
-**已完成**：项目完整可运行（本地 7 容器 / 部署 4 容器 lite 栈，目标 2GB ECS）。Phase 0-6 全部完成：pgvector 迁移、LangGraph 面试 HITL、RAG 混合检索（vector+BM25→RRF→rerank，lifespan 自动构建 BM25 索引）、RAGAS 评估、双 Swagger、首次云端部署（`123.56.239.7`，域名 `shilian.asia` 待 ICP 备案）。**2026-08-01**：P0-1/P0-2 + P1 越权 + Topics 1/2/3（岗位幂等 / retrieval_check 折叠 / 死代码清理）+ 过时测试修复 + 待办 10 项（P2-1~4 + info-1~6）全部完成，`pytest -m unit` 73 passed。详细实施记录见 `docs/PROJECT_HISTORY.md`。
+**2026-08-01（最新）**：项目完整可运行（本地 7 容器 / 部署 4 容器 lite 栈，目标 2GB ECS）。`pytest -m "unit"` **89 passed**，前端 `npm run build` 通过，最终整体 code review **Ready to merge**。最新完成：出题 SSE 流式化（见下）；历史里程碑见文末。
 
-**2026-08-01 全真链路验证**：新增 `tests/test_full_chain_integration.py`（`RUN_FULL_CHAIN=1` 门控，消耗真实 token），覆盖 RAG 混合检索（知识库 + 题库带过滤）、RetrievalCheck 自检循环、PositionAgent 5 工具全链。4 个全真测试全通过。**测试暴露并修复两个真实 bug**：
+### 出题 SSE 流式化（✅ 已完成；手动 E2E 待做）
 
-- **🚨 RAG 向量检索完全失效（生产级）**：DB 停留在 Milvus 期"已删 embedding 列"状态，`alembic upgrade head`（a2b3c4d5e6f70001）从未执行 → 向量检索静默降级为 BM25-only（`app/retrieval/vector.py` 吞异常返回 `[]`）。修复：`alembic upgrade head` + 新增 `scripts/rebuild_embeddings.py` 一次性重建两表 embedding（question_bank 84/84 + knowledge_chunks 32/32）。⚠️ **部署/生产 DB 大概率同样缺列，上线前需执行同样两步。**
-- **rerank 模型失效 + 崩溃**：`DASHSCOPE_RERANK_MODEL` 改为 `gte-rerank-v2`（原 `gte-rerank` 无效名）；DashScope 非 200 响应（403/output=None）不抛异常，`app/retrieval/rerank.py` 已加显式 status_code 检查，失败回退原序不崩溃。
+`/interviews/start` 的 16s 等待里 ~14s 是单次 DeepSeek 选题 LLM（`chain.ainvoke` 一次性阻塞），前端 `ResumeUpload.vue:handleStart` 只显示假进度条动画。已改造为 `?stream=true` 全程 SSE（status → chunk token 逐字流出 → done），前端实时增量 JSON 解析让题目逐条浮现，消除假进度条等待。**总耗时不变，只改善感知**。设计：`docs/superpowers/specs/2026-08-01-question-streaming-sse-design.md`；计划：`docs/superpowers/plans/2026-08-01-question-streaming-sse.md`。
 
-agent 全链曾出现偶发 API 不稳定（"Connection error." / interview_result 幻觉），重试即过，属 DeepSeek API 层非代码 bug。运行命令：`docker exec -e RUN_FULL_CHAIN=1 shilian-app pytest tests/test_full_chain_integration.py -v`。
-
-**2026-08-01 出题链路提速（4x）**：`/interviews/start` 曾因 DeepSeek 选题单次调用 60~120s 而让前端 axios 默认 60s 超时（`timeout of 60000ms exceeded`），后端却继续跑完 → 用户重试产生重复面试。修复两处：
-- **瘦身 `question_select` prompt + `select_and_adapt_questions` v2**：LLM 输入只传题面（id+question，-83%）、输出去掉参考答案（原始输出仅 704 chars）；新增 `_merge_selected_questions` 按 bank_id 从题库候选补齐 `reference_answer`/`key_points`（LLM 结果不可用时回退候选前 N 题）。实测 63s → **16s**。
-- **前端 `startInterview` 超时 60s → 180s**（与 positionAgent 120/180s 覆盖模式一致）。
-
-`pytest -m unit` 73 passed（新增 6 个 `TestSelectAndAdaptQuestions`）。提交 `5d2df5e`（本地 dev，不 push）。
-
-**待办（2026-08-01 审计后 10 项已全部完成）**：
-
-> ✅ **已执行（2026-08-01）**：`docs/superpowers/plans/2026-08-01-claude-todo-10-fixes.md`（TDD 10 Task）。P2-1 结束判断用 `len(questions)` + 越界先校验；P2-2 提交失败打 `persist_failed` 标记；P2-3 报告用 DB feedback；P2-4 未评分回退 0.0；info-1 lifespan 关闭 checkpointer；info-2 系统 prompt 补第 5 工具 + `interview_result`；info-3 画像 prompt 移 YAML；info-4 出题结果归一化 list；info-5 历史去重当前答案；info-6 BM25Index 携带 metadata（RRF 融合保留）。全部提交本地 dev。
-
-**2026-08-01 出题 SSE 流式化（已完成；手动 E2E 待做）**：`/interviews/start` 的 16s 等待里 ~14s 是单次 DeepSeek 选题 LLM（`chain.ainvoke` 一次性阻塞），前端 `ResumeUpload.vue:handleStart` 只显示假进度条动画。已改造为 `?stream=true` 全程 SSE（status → chunk token 逐字流出 → done），前端实时增量 JSON 解析让题目逐条浮现，消除假进度条等待。**总耗时不变，只改善感知**。设计：`docs/superpowers/specs/2026-08-01-question-streaming-sse-design.md`；计划：`docs/superpowers/plans/2026-08-01-question-streaming-sse.md`。
-
-- ✅ **7 任务 + 收尾全部完成（subagent-driven，每任务 implementer + spec review + code quality review）**：
-  - ✅ Task 1 `try_parse_partial_array` 增量 JSON 数组解析（前端 tryParseQuestions 算法后端等价版）`b2c17e7`
-  - ✅ Task 2 `select_and_adapt_questions_stream` 流式选题（`chain.astream` 逐 token + 异常兜底回退候选前 N 题）`36c773c`
-  - ✅ Task 3 抽取 `_prepare_questions`（RAG 检索，流式/非流式共用，纯重构回归 82→82）`fe02730`
-  - ✅ Task 4 `start_interview_stream`（SSE async generator：status→chunk→done；失败路径 yield error 事件防 UI 卡死）`bdb4f4a`+`5f7eea6`
-  - ✅ Task 5 路由 `/interviews/start?stream=true`（StreamingResponse SSE 分支，非流式默认零回归）`78f0f7a`
-  - ✅ Task 6 前端 `startInterviewStream`+`tryParseQuestions`（SSE 消费 + 增量解析）`84aea93`
-  - ✅ Task 7 `ResumeUpload.vue` 流式化（题目逐条浮现 + 去重渲染 + 标题锁定）`602861d`
-  - ✅ 收尾 4 项：Task 2 遗留 slim 输入测试 `6c4235f` / 路由 body_iterator 转发断言 `5c0cc62` / `submitAnswerStream` 非 200 守卫 `4921318` / 假动画标题竞争修复 `41af3af`
+- **7 任务 + 收尾全部完成（subagent-driven，每任务 implementer + spec review + code quality review）**：
+  - Task 1 `try_parse_partial_array` 增量 JSON 数组解析（前端 tryParseQuestions 算法后端等价版）`b2c17e7`
+  - Task 2 `select_and_adapt_questions_stream` 流式选题（`chain.astream` 逐 token + 异常兜底回退候选前 N 题）`36c773c`
+  - Task 3 抽取 `_prepare_questions`（RAG 检索，流式/非流式共用，纯重构回归 82→82）`fe02730`
+  - Task 4 `start_interview_stream`（SSE async generator：status→chunk→done；失败路径 yield error 事件防 UI 卡死）`bdb4f4a`+`5f7eea6`
+  - Task 5 路由 `/interviews/start?stream=true`（StreamingResponse SSE 分支，非流式默认零回归）`78f0f7a`
+  - Task 6 前端 `startInterviewStream`+`tryParseQuestions`（SSE 消费 + 增量解析）`84aea93`
+  - Task 7 `ResumeUpload.vue` 流式化（题目逐条浮现 + 去重渲染 + 标题锁定）`602861d`
+  - 收尾 4 项：Task 2 遗留 slim 输入测试 `6c4235f` / 路由 body_iterator 转发断言 `5c0cc62` / `submitAnswerStream` 非 200 守卫 `4921318` / 假动画标题竞争修复 `41af3af`
 - **验证**：`pytest -m "unit"` **89 passed**（基线 73 + 新增 16）；前端 `npm run build` 通过；最终整体 code review **Ready to merge**。
-- 实现注记：Task 2 里 `chain.astream(input={...})` 用关键字形式（测试 mock 只收关键字参数；LangChain `Runnable.astream(self, input, ...)` 首参即 input，真实有效）。计划原文 `chain.astream({...})` 位置参数会 TypeError。
-- **待办（不阻塞）**：① stream/非流式校验+落库段重复（约 45 行，spec 明示的设计取舍）——后续可抽取 `_validate_resume()` + `_persist_interview()`；② `startInterviewStream` 未接 AbortController（中途离开页面 done 仍会跳转，流仅 ~16s，影响小）；③ 前端 `startInterview` 导出已无引用（保留作回退）。
-- **手动 E2E 未做**（需真实 DeepSeek token + 已完成简历）：按计划"手动端到端验证"节 curl `?stream=true` 看 status→chunk→done；浏览器走前端流程看题目逐条浮现。
-- 提交全在本地 dev，不 push。
+- 实现注记：`chain.astream(input={...})` 用关键字形式（LangChain `Runnable.astream` 首参即 input；计划原文位置参数会 TypeError）。
+- **手动 E2E 未做**（需真实 DeepSeek token + 已完成简历）：curl `?stream=true` 看 status→chunk→done；浏览器走前端流程看题目逐条浮现。
+
+### 待办（不阻塞）
+
+1. **stream/非流式校验+落库段重复**（约 45 行，spec 明示的设计取舍）——后续可抽取 `_validate_resume()` + `_persist_interview()`
+2. **`startInterviewStream` 未接 AbortController**——中途离开页面 done 仍会跳转（流仅 ~16s，影响小）
+3. **前端 `startInterview` 导出已无引用**——保留作回退
+4. **部署/生产 DB 大概率缺 embedding 列**（全真链路验证暴露）——上线前必须执行 `alembic upgrade head` + `scripts/rebuild_embeddings.py`（question_bank 84/84 + knowledge_chunks 32/32）
+
+### 里程碑（2026-08-01 及之前，详见 `docs/PROJECT_HISTORY.md`）
+
+- **Phase 0-6 完成**：pgvector 迁移、LangGraph 面试 HITL、RAG 混合检索（vector+BM25→RRF→rerank，lifespan 自动构建 BM25 索引）、RAGAS 评估、双 Swagger、首次云端部署（`123.56.239.7`，域名 `shilian.asia` 待 ICP 备案）
+- **全真链路验证**（`docker exec -e RUN_FULL_CHAIN=1 shilian-app pytest tests/test_full_chain_integration.py -v`）：RAG 混合检索 + RetrievalCheck 自检 + PositionAgent 5 工具全链，4 测试通过。暴露并修复两个真实 bug：① **RAG 向量检索完全失效（生产级）**——DB 停留在 Milvus 期缺 embedding 列，向量检索静默降级 BM25-only；修复 `alembic upgrade head` + 新增 `rebuild_embeddings.py`；② **rerank 模型失效 + 崩溃**——`DASHSCOPE_RERANK_MODEL` 改 `gte-rerank-v2` + `app/retrieval/rerank.py` 加 status_code 检查。agent 全链偶发 API 不稳定（`Connection error`/幻觉）属 DeepSeek API 层，重试即过
+- **出题链路提速 4x**（63s→16s）：瘦身 `question_select` prompt + `select_and_adapt_questions` v2（LLM 只选题面 -83%，参考答案按 bank_id 补齐）+ 前端 `startInterview` 超时 60s→180s
+- **审计待办 10 项完成**（P2-1~4 + info-1~6）：结束判断 `len(questions)`、提交失败 `persist_failed`、报告用 DB feedback、未评分回退 0.0、lifespan 关 checkpointer、系统 prompt 第 5 工具 + `interview_result`、画像 prompt 移 YAML、出题结果归一化、历史去重当前答案、BM25Index 带 metadata
