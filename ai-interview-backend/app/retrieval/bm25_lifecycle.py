@@ -15,7 +15,8 @@ question_bank_bm25: BM25Index | None = None
 async def build_bm25_indices(db_session) -> None:
     """从 PostgreSQL 数据构建两个 BM25 索引（应用启动时调用）。
 
-    会加载 KnowledgeChunk.content 和 QuestionBank.question/reference_answer，构建全局单例。
+    会加载 KnowledgeChunk(id, content) 和 QuestionBank(id, question, reference_answer)，
+    以 (pg_id, text) 对构建全局单例，使 BM25 搜索结果携带真实的数据库主键。
 
     Args:
         db_session: 启动时传入的 AsyncSession。
@@ -26,23 +27,25 @@ async def build_bm25_indices(db_session) -> None:
     from app.models.knowledge import KnowledgeChunk
     from app.models.question_bank import QuestionBank
 
-    # Build knowledge index
-    result = await db_session.execute(select(KnowledgeChunk.content))
-    knowledge_texts = [row[0] for row in result.fetchall() if row[0]]
-    knowledge_bm25 = BM25Index("knowledge_chunks")
-    knowledge_bm25.build(knowledge_texts)
-
-    # Build question bank index
+    # Build knowledge index — SELECT id + content
     result = await db_session.execute(
-        select(QuestionBank.question, QuestionBank.reference_answer)
+        select(KnowledgeChunk.id, KnowledgeChunk.content)
     )
-    q_texts = []
-    for question, answer in result.fetchall():
+    knowledge_items = [(row[0], row[1]) for row in result.fetchall() if row[1]]
+    knowledge_bm25 = BM25Index("knowledge_chunks")
+    knowledge_bm25.build(knowledge_items)
+
+    # Build question bank index — SELECT id + question + reference_answer
+    result = await db_session.execute(
+        select(QuestionBank.id, QuestionBank.question, QuestionBank.reference_answer)
+    )
+    q_items = []
+    for qid, question, answer in result.fetchall():
         text = f"{question or ''} {answer or ''}".strip()
         if text:
-            q_texts.append(text)
+            q_items.append((qid, text))
     question_bank_bm25 = BM25Index("question_bank")
-    question_bank_bm25.build(q_texts)
+    question_bank_bm25.build(q_items)
 
     logger.info(
         "BM25 indices built: knowledge=%d, question_bank=%d",
