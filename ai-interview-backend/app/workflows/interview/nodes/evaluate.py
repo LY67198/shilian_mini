@@ -117,5 +117,6 @@ async def evaluate_node(state: InterviewState, config: RunnableConfig) -> dict:
             )
     except Exception as e:
         logger.error("Failed to persist score to InterviewMessage: %s", e)
+        return {"score": result.score, "feedback": result.feedback, "persist_failed": True}
 
     return {"score": result.score, "feedback": result.feedback}

@@ -195,6 +195,46 @@ class TestEvaluateNode:
         # DB must NOT be called when LLM fails (early return before DB write)
         mock_db.execute.assert_not_called()
 
+    async def test_commit_failure_marks_persist_failed(self):
+        """提交失败时打 persist_failed 标记，面试不中断"""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from app.workflows.interview.nodes.evaluate import evaluate_node
+        from app.workflows.interview.state import ScoreResult
+
+        state = {
+            "current_question": "Q",
+            "answer": "A",
+            "resume_context": {},
+            "chat_history": [],
+            "knowledge_context": [],
+            "interview_id": 1,
+            "current_index": 0,
+        }
+
+        chain = AsyncMock()
+        chain.ainvoke.return_value = ScoreResult(score=6.0, feedback="ok")
+        mock_prompt = type("MockPrompt", (), {"__or__": lambda self, other: chain})()
+
+        mock_msg = MagicMock()
+        mock_msg.score = None
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_msg
+        mock_db = AsyncMock()
+        mock_db.execute.return_value = mock_result
+        mock_db.commit.side_effect = RuntimeError("db down")
+
+        with patch(
+            "app.workflows.interview.nodes.evaluate.load_prompt",
+            return_value=mock_prompt,
+        ), patch(
+            "app.workflows.interview.nodes.evaluate.get_chat_llm"
+        ) as mock_get_llm:
+            mock_get_llm.return_value.with_structured_output.return_value = object()
+            result = await evaluate_node(state, {"configurable": {"db": mock_db}})
+
+        assert result["score"] == 6.0
+        assert result["persist_failed"] is True
+
 
 @pytest.mark.unit
 class TestExtractJson:
