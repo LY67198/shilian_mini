@@ -212,7 +212,12 @@ class AIService:
         target_n: 需要挑选的题目数。
 
     Returns:
-        挑选并按需改编后的题目列表。
+        挑选并按需改编后的题目列表（含题库参考答案）。
+
+    Note:
+        v2 瘦身：LLM 输入只给题面（id+question）、输出只给 index/question/bank_id，
+        参考答案由 `_merge_selected_questions` 按 bank_id 从题库候选补齐，
+        大幅降低 prompt 体积与输出 token，缩短 DeepSeek 时延。
     """
         is_intern = any(kw in target_position for kw in ["实习", "intern", "Intern"])
         intern_hint = (
@@ -220,6 +225,12 @@ class AIService:
             if is_intern
             else ""
         )
+
+        # 瘦身输入：只传题面，不传参考答案/要点，降低首 token 时延
+        slim_candidates = [
+            {"id": c.get("id"), "question": c.get("question")}
+            for c in candidates
+        ]
 
         prompt = load_prompt("question_select")
         llm = get_chat_llm(temperature=0.3)
@@ -231,10 +242,75 @@ class AIService:
             "candidate_count": len(candidates),
             "target_n": target_n,
             "resume_json": json.dumps(parsed_resume, ensure_ascii=False),
-            "candidates_json": json.dumps(candidates, ensure_ascii=False),
+            "candidates_json": json.dumps(slim_candidates, ensure_ascii=False),
         })
         content = result.content if hasattr(result, "content") else str(result)
-        return self._extract_json(content)
+        selected = self._as_question_list(self._extract_json(content))
+        return self._merge_selected_questions(selected, candidates, target_n)
+
+    @staticmethod
+    def _merge_selected_questions(
+        selected: list,
+        candidates: list,
+        target_n: int,
+    ) -> list:
+        """LLM 只返回 index/question/bank_id，参考答案等字段从题库候选按 id 补齐。
+
+    Args:
+        selected: LLM 返回的选题列表（含 index/question/bank_id）。
+        candidates: 原始题库候选（含完整 reference_answer / key_points）。
+        target_n: 期望题目数。
+
+    Returns:
+        合并后的完整题目列表（统一 bank_id 形状）；LLM 结果不可用时回退用候选前 N 题。
+    """
+        def to_question(cand: dict, question: str = None, category: str = None) -> dict:
+            """将题库候选规范化为最终题目形状（LLM 可覆盖题面/分类）。"""
+            return {
+                "bank_id": cand.get("id"),
+                "question": question or cand.get("question"),
+                "category": category if category is not None else cand.get("category"),
+                "reference_answer": cand.get("reference_answer", ""),
+                "key_points": cand.get("key_points", []),
+                "difficulty": cand.get("difficulty"),
+                "position_tag": cand.get("position_tag"),
+                "similarity": cand.get("similarity"),
+                "source": "from_bank",
+            }
+
+        by_id = {c.get("id"): c for c in candidates}
+        merged: list = []
+        used_ids: set = set()
+        for item in selected:
+            cand = by_id.get(item.get("bank_id"))
+            if cand is None:
+                idx = item.get("index")
+                if isinstance(idx, int) and 0 <= idx < len(candidates):
+                    cand = candidates[idx]
+            if cand is None or cand.get("id") in used_ids:
+                logger.warning(
+                    f"[选题] 跳过未匹配/重复候选题: bank_id={item.get('bank_id')}"
+                )
+                continue
+            used_ids.add(cand["id"])
+            merged.append(
+                to_question(cand, item.get("question"), item.get("category"))
+            )
+
+        if not merged:
+            logger.warning("[选题] LLM 未返回有效选题，回退用题库候选前 N 题")
+            return [to_question(c) for c in candidates[:target_n]]
+
+        # 不足 target_n 时，用未选中的候选按序补足
+        for cand in candidates:
+            if len(merged) >= target_n:
+                break
+            if cand.get("id") in used_ids:
+                continue
+            used_ids.add(cand["id"])
+            merged.append(to_question(cand))
+
+        return merged[:target_n]
 
     async def generate_with_seeds(
         self,

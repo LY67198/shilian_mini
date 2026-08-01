@@ -87,3 +87,160 @@ class TestAsQuestionList:
     def test_filters_non_dict_items(self):
         result = [{"question": "Q1"}, "not-a-dict"]
         assert AIService._as_question_list(result) == [{"question": "Q1"}]
+
+
+@pytest.mark.unit
+class TestSelectAndAdaptQuestions:
+    """select_and_adapt_questions 瘦身改造 — LLM 只选题面，参考答案按 bank_id 补齐"""
+
+    CANDIDATES = [
+        {
+            "id": 1, "question": "讲下 Python 的 GIL",
+            "reference_answer": "GIL 是全局解释器锁...", "key_points": ["GIL"],
+            "difficulty": "medium", "position_tag": "python_backend",
+            "similarity": 0.9, "source": "from_bank",
+        },
+        {
+            "id": 2, "question": "asyncio 事件循环原理",
+            "reference_answer": "事件循环基于协程...", "key_points": ["协程"],
+            "difficulty": "medium", "position_tag": "python_backend",
+            "similarity": 0.85, "source": "from_bank",
+        },
+        {
+            "id": 3, "question": "RESTful 限流怎么做",
+            "reference_answer": "令牌桶 + Redis Lua...", "key_points": ["限流"],
+            "difficulty": "hard", "position_tag": "python_backend",
+            "similarity": 0.7, "source": "from_bank",
+        },
+    ]
+
+    @staticmethod
+    def _patch_llm(monkeypatch, payload):
+        """构造 prompt | llm chain 的 mock，返回 payload 作为 LLM 内容。"""
+        from unittest.mock import AsyncMock
+
+        from app.services.client import ai_service as mod
+
+        chain = AsyncMock()
+        fake_msg = type("M", (), {"content": payload})()
+        chain.ainvoke.return_value = fake_msg
+        mock_prompt = type("P", (), {"__or__": lambda self, other: chain})()
+        monkeypatch.setattr(mod, "load_prompt", lambda name: mock_prompt)
+        monkeypatch.setattr(mod, "get_chat_llm", lambda **kw: object())
+        return chain
+
+    async def test_merges_reference_answer_from_candidates(self, monkeypatch):
+        from app.services.client.ai_service import ai_service
+
+        payload = (
+            '[{"index": 0, "question": "讲下 Python 的 GIL（微调）", "category": "technical", "bank_id": 1, "source": "from_bank"},'
+            ' {"index": 1, "question": "asyncio 事件循环原理", "category": "technical", "bank_id": 2, "source": "from_bank"}]'
+        )
+        self._patch_llm(monkeypatch, payload)
+
+        questions = await ai_service.select_and_adapt_questions(
+            candidates=self.CANDIDATES,
+            parsed_resume={"skills": ["Python", "asyncio"]},
+            target_position="Python 后端",
+            difficulty="medium",
+            target_n=2,
+        )
+        assert len(questions) == 2
+        q = questions[0]
+        assert q["question"] == "讲下 Python 的 GIL（微调）"
+        assert q["bank_id"] == 1
+        # 参考答案来自题库候选而非 LLM 输出
+        assert q["reference_answer"] == "GIL 是全局解释器锁..."
+        assert q["key_points"] == ["GIL"]
+        assert q["source"] == "from_bank"
+
+    async def test_sends_slim_candidates_to_llm(self, monkeypatch):
+        """LLM 收到的 candidates_json 只含 id+question，不含参考答案，缩小输入。"""
+        from app.services.client.ai_service import ai_service
+
+        payload = '[{"index": 0, "question": "Q", "bank_id": 1}]'
+        chain = self._patch_llm(monkeypatch, payload)
+
+        await ai_service.select_and_adapt_questions(
+            candidates=self.CANDIDATES,
+            parsed_resume={},
+            target_position="Python 后端",
+            difficulty="medium",
+            target_n=1,
+        )
+        args, _ = chain.ainvoke.call_args
+        sent = args[0]["candidates_json"]
+        assert '"reference_answer"' not in sent
+        assert '"key_points"' not in sent
+        assert '"id"' in sent and '"question"' in sent
+
+    async def test_falls_back_to_index_when_bank_id_missing(self, monkeypatch):
+        from app.services.client.ai_service import ai_service
+
+        # LLM 漏传 bank_id，仅靠 index 定位候选
+        payload = '[{"index": 2, "question": "RESTful 限流怎么做", "category": "system-design"}]'
+        self._patch_llm(monkeypatch, payload)
+
+        questions = await ai_service.select_and_adapt_questions(
+            candidates=self.CANDIDATES,
+            parsed_resume={},
+            target_position="Python 后端",
+            difficulty="hard",
+            target_n=1,
+        )
+        assert len(questions) == 1
+        assert questions[0]["bank_id"] == 3
+        assert questions[0]["reference_answer"] == "令牌桶 + Redis Lua..."
+
+    async def test_skips_unmatched_bank_id(self, monkeypatch):
+        from app.services.client.ai_service import ai_service
+
+        payload = (
+            '[{"index": 0, "question": "合法题", "bank_id": 1},'
+            ' {"index": 99, "question": "幻觉题", "bank_id": 999}]'
+        )
+        self._patch_llm(monkeypatch, payload)
+
+        questions = await ai_service.select_and_adapt_questions(
+            candidates=self.CANDIDATES,
+            parsed_resume={},
+            target_position="Python 后端",
+            difficulty="medium",
+            target_n=1,
+        )
+        assert len(questions) == 1
+        assert questions[0]["bank_id"] == 1
+
+    async def test_empty_llm_output_falls_back_to_first_candidates(self, monkeypatch):
+        from app.services.client.ai_service import ai_service
+
+        # LLM 返回 parse_failed 兜底 → 归一化为空 → 回退候选前 N 题
+        self._patch_llm(monkeypatch, '{"parse_failed": true, "score": 5.0}')
+
+        questions = await ai_service.select_and_adapt_questions(
+            candidates=self.CANDIDATES,
+            parsed_resume={},
+            target_position="Python 后端",
+            difficulty="medium",
+            target_n=2,
+        )
+        assert len(questions) == 2
+        assert questions[0]["bank_id"] == 1
+        assert questions[1]["bank_id"] == 2
+        assert questions[0]["reference_answer"] == "GIL 是全局解释器锁..."
+
+    async def test_pads_when_llm_returns_fewer_than_target(self, monkeypatch):
+        from app.services.client.ai_service import ai_service
+
+        payload = '[{"index": 0, "question": "仅此一题", "bank_id": 1}]'
+        self._patch_llm(monkeypatch, payload)
+
+        questions = await ai_service.select_and_adapt_questions(
+            candidates=self.CANDIDATES,
+            parsed_resume={},
+            target_position="Python 后端",
+            difficulty="medium",
+            target_n=3,
+        )
+        assert len(questions) == 3
+        assert {q["bank_id"] for q in questions} == {1, 2, 3}

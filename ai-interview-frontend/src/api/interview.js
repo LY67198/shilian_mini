@@ -1,7 +1,8 @@
 import api from './request'
 
 export function startInterview(data) {
-  return api.post('/interviews/start', data)
+  // RAG 出题链路（embedding + rerank + DeepSeek 选题）可长达 2 分钟，超时放宽到 180s
+  return api.post('/interviews/start', data, { timeout: 180000 })
 }
 
 export function submitAnswer(interviewId, answer) {
