@@ -235,6 +235,46 @@ class TestEvaluateNode:
         assert result["score"] == 6.0
         assert result["persist_failed"] is True
 
+    async def test_history_excludes_current_answer(self):
+        """history_text 排除与 {answer} 重复的当前答案消息"""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from app.workflows.interview.nodes.evaluate import evaluate_node
+        from app.workflows.interview.state import ScoreResult
+
+        state = {
+            "current_question": "Q2",
+            "answer": "当前答案",
+            "resume_context": {},
+            "chat_history": [
+                {"role": "interviewer", "content": "Q1"},
+                {"role": "candidate", "content": "旧回答"},
+                {"role": "interviewer", "content": "Q2"},
+                {"role": "candidate", "content": "当前答案"},  # 与 answer 重复
+            ],
+            "knowledge_context": [],
+            "interview_id": 1,
+            "current_index": 1,
+        }
+
+        chain = AsyncMock()
+        chain.ainvoke.return_value = ScoreResult(score=8.0, feedback="ok")
+        mock_prompt = type("MockPrompt", (), {"__or__": lambda self, other: chain})()
+        mock_db = AsyncMock()
+
+        with patch(
+            "app.workflows.interview.nodes.evaluate.load_prompt",
+            return_value=mock_prompt,
+        ), patch(
+            "app.workflows.interview.nodes.evaluate.get_chat_llm"
+        ) as mock_get_llm:
+            mock_get_llm.return_value.with_structured_output.return_value = object()
+            await evaluate_node(state, {"configurable": {"db": mock_db}})
+
+        variables = chain.ainvoke.call_args[0][0]
+        assert "当前答案" not in variables["history_text"]
+        assert "旧回答" in variables["history_text"]
+        assert variables["answer"] == "当前答案"
+
 
 @pytest.mark.unit
 class TestExtractJson:

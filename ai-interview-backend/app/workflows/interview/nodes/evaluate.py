@@ -33,9 +33,15 @@ async def evaluate_node(state: InterviewState, config: RunnableConfig) -> dict:
     Returns:
         Dict with score / feedback for LangGraph state update.
     """
-    # Build conversation history text
-    history_text = ""
+    # Build conversation history text（排除当前答案消息，避免与 {answer} 重复注入）
     chat_history = state.get("chat_history", [])
+    if (
+        chat_history
+        and chat_history[-1].get("role") == "candidate"
+        and chat_history[-1].get("content") == state.get("answer")
+    ):
+        chat_history = chat_history[:-1]
+    history_text = ""
     for msg in chat_history[-6:]:
         role = "面试官" if msg.get("role") == "interviewer" else "候选人"
         history_text += f"{role}: {msg.get('content', '')}\n"
