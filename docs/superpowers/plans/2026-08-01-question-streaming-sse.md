@@ -1,6 +1,8 @@
 # 出题 SSE 流式化 实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
+
+> **✅ 状态（2026-08-01）：Task 1-7 + 收尾 4 项全部完成并提交本地 dev。** 最终整体 code review **Ready to merge**，`pytest -m "unit"` 89 passed、前端 `npm run build` 通过。唯一待办是"手动端到端验证"（需真实 DeepSeek token + 已完成简历，见下文）。
 
 **Goal:** 把 `/interviews/start` 出题链路改为 SSE 流式输出（status → chunk token 逐字流出 → done），前端实时增量解析 JSON 让题目逐条浮现，消除 16s 假进度条等待。
 
@@ -42,12 +44,12 @@
 - Modify: `app/common/json_utils.py`
 - Test: `tests/test_json_partial_array.py`（Create）
 
-- [ ] **Step 1: 读文件确认 `import json` 已存在**
+- [x] **Step 1: 读文件确认 `import json` 已存在**
 
 Run: `head -20 app/common/json_utils.py`
 Expected: 顶部已有 `import json`（`extract_json` 依赖它）。若没有，补上。
 
-- [ ] **Step 2: 写失败测试**
+- [x] **Step 2: 写失败测试**
 
 Create `tests/test_json_partial_array.py`:
 
@@ -83,12 +85,12 @@ class TestTryParsePartialArray:
         assert try_parse_partial_array('{"a": 1') is None
 ```
 
-- [ ] **Step 3: 跑测试确认失败**
+- [x] **Step 3: 跑测试确认失败**
 
 Run: `docker exec shilian-app pytest tests/test_json_partial_array.py -v`
 Expected: FAIL — `ImportError: cannot import name 'try_parse_partial_array'`
 
-- [ ] **Step 4: 实现**
+- [x] **Step 4: 实现**
 
 Append to `app/common/json_utils.py`:
 
@@ -119,12 +121,12 @@ def try_parse_partial_array(text: str) -> list | None:
         return None
 ```
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `docker exec shilian-app pytest tests/test_json_partial_array.py -v`
 Expected: 6 passed
 
-- [ ] **Step 6: 回归 + 提交**
+- [x] **Step 6: 回归 + 提交**
 
 Run: `docker exec shilian-app pytest tests/test_json_partial_array.py tests/test_ai_service_unit.py -m "unit"`
 Expected: 全绿
@@ -142,7 +144,7 @@ git commit -m "feat: 增量 JSON 数组解析 try_parse_partial_array（出题�
 - Modify: `app/services/client/ai_service.py`
 - Modify: `tests/test_ai_service_unit.py`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 Append to `tests/test_ai_service_unit.py` (after `TestSelectAndAdaptQuestions`):
 
@@ -250,12 +252,12 @@ class TestSelectAndAdaptQuestionsStream:
         assert result[0]["bank_id"] == 1
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `docker exec shilian-app pytest tests/test_ai_service_unit.py::TestSelectAndAdaptQuestionsStream -v`
 Expected: FAIL — `AttributeError: ... has no attribute 'select_and_adapt_questions_stream'`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 Add to `app/services/client/ai_service.py`, immediately after `select_and_adapt_questions` method:
 
@@ -317,12 +319,12 @@ Add to `app/services/client/ai_service.py`, immediately after `select_and_adapt_
 
 > 若 `ai_service.py` 顶部还没有 `logger`，在实现前补：`logger = logging.getLogger(__name__)`（并确认 `import logging` 已存在）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `docker exec shilian-app pytest tests/test_ai_service_unit.py::TestSelectAndAdaptQuestionsStream -v`
 Expected: 2 passed
 
-- [ ] **Step 5: 回归 + 提交**
+- [x] **Step 5: 回归 + 提交**
 
 Run: `docker exec shilian-app pytest tests/test_ai_service_unit.py -m "unit"`
 Expected: 全绿
@@ -341,12 +343,12 @@ git commit -m "feat: select_and_adapt_questions_stream 流式选题（chain.astr
 
 纯重构（行为不变），用回归测试保护。
 
-- [ ] **Step 1: 跑回归基线**
+- [x] **Step 1: 跑回归基线**
 
 Run: `docker exec shilian-app pytest -m "unit"`
 Expected: 全绿（基线）
 
-- [ ] **Step 2: 抽取 `_prepare_questions` + 重构 `_generate_questions_with_rag`**
+- [x] **Step 2: 抽取 `_prepare_questions` + 重构 `_generate_questions_with_rag`**
 
 在 `InterviewService` 内新增 `_prepare_questions`，把原 `_generate_questions_with_rag`（`interview_service.py:72-157`）的 RAG 检索段整体移入，返回 `candidates`：
 
@@ -513,12 +515,12 @@ Expected: 全绿（基线）
         return questions
 ```
 
-- [ ] **Step 3: 回归确认**
+- [x] **Step 3: 回归确认**
 
 Run: `docker exec shilian-app pytest -m "unit"`
 Expected: 全绿（与基线一致）
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add app/services/client/interview_service.py
@@ -533,7 +535,7 @@ git commit -m "refactor: interview_service 抽取 _prepare_questions（RAG 检�
 - Modify: `app/services/client/interview_service.py`
 - Test: `tests/test_start_interview_stream.py`（Create）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 Create `tests/test_start_interview_stream.py`:
 
@@ -657,12 +659,12 @@ class TestStartInterviewStream:
         assert parsed[1][1]["first_question"] == "Q1"
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `docker exec shilian-app pytest tests/test_start_interview_stream.py -v`
 Expected: FAIL — `AttributeError: ... has no attribute 'start_interview_stream'`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 Add to `InterviewService` in `app/services/client/interview_service.py`, after `start_interview`:
 
@@ -790,12 +792,12 @@ Add to `InterviewService` in `app/services/client/interview_service.py`, after `
         })
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `docker exec shilian-app pytest tests/test_start_interview_stream.py -v`
 Expected: 2 passed
 
-- [ ] **Step 5: 回归 + 提交**
+- [x] **Step 5: 回归 + 提交**
 
 Run: `docker exec shilian-app pytest -m "unit"`
 Expected: 全绿
@@ -813,7 +815,7 @@ git commit -m "feat: start_interview_stream SSE 出题（status → chunk → do
 - Modify: `app/api/client/v1/interview.py`
 - Test: `tests/test_start_stream_route.py`（Create）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 Create `tests/test_start_stream_route.py`:
 
@@ -872,12 +874,12 @@ class TestStartStreamRoute:
         svc.start_interview.assert_awaited_once()
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `docker exec shilian-app pytest tests/test_start_stream_route.py -v`
 Expected: FAIL — `TypeError: start_interview() got an unexpected keyword argument 'stream'`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 Modify `app/api/client/v1/interview.py` `start_interview` (lines 48-64):
 
@@ -923,12 +925,12 @@ async def start_interview(
     return ApiResponse.success(data=result)
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `docker exec shilian-app pytest tests/test_start_stream_route.py -v`
 Expected: 2 passed
 
-- [ ] **Step 5: 回归 + 提交**
+- [x] **Step 5: 回归 + 提交**
 
 Run: `docker exec shilian-app pytest -m "unit"`
 Expected: 全绿
@@ -947,7 +949,7 @@ git commit -m "feat: /interviews/start?stream=true 路由 SSE 分支"
 
 前端无测试框架，用 `npm run build` 做语法验证。
 
-- [ ] **Step 1: 实现**
+- [x] **Step 1: 实现**
 
 Append to `ai-interview-frontend/src/api/interview.js`:
 
@@ -1032,12 +1034,12 @@ function tryParseQuestions(buffer) {
 }
 ```
 
-- [ ] **Step 2: build 验证**
+- [x] **Step 2: build 验证**
 
 Run: `cd ai-interview-frontend && npm run build`
 Expected: 构建成功，无语法错误
 
-- [ ] **Step 3: 提交**
+- [x] **Step 3: 提交**
 
 ```bash
 git add ai-interview-frontend/src/api/interview.js
@@ -1051,14 +1053,14 @@ git commit -m "feat(frontend): startInterviewStream 流式出题消费 + tryPars
 **Files:**
 - Modify: `ai-interview-frontend/src/views/ResumeUpload.vue`
 
-- [ ] **Step 1: import 增加 `startInterviewStream`**
+- [x] **Step 1: import 增加 `startInterviewStream`**
 
 Modify line 146:
 ```js
 import { startInterview, startInterviewStream } from '../api/interview'
 ```
 
-- [ ] **Step 2: template 增加题目浮现区**
+- [x] **Step 2: template 增加题目浮现区**
 
 In the `step === 'starting'` block (`<div v-if="step === 'starting'" class="parsing-stage">`, after the progress bar / tip text, add):
 
@@ -1071,7 +1073,7 @@ In the `step === 'starting'` block (`<div v-if="step === 'starting'" class="pars
         </div>
 ```
 
-- [ ] **Step 3: script 增加 `streamedQuestions` ref 并改造 `handleStart`**
+- [x] **Step 3: script 增加 `streamedQuestions` ref 并改造 `handleStart`**
 
 Add near `const startingTitle`:
 ```js
@@ -1115,7 +1117,7 @@ async function handleStart() {
 }
 ```
 
-- [ ] **Step 4: style 增加题目卡片样式**
+- [x] **Step 4: style 增加题目卡片样式**
 
 In `<style scoped>`, append:
 ```css
@@ -1125,12 +1127,12 @@ In `<style scoped>`, append:
 .q-text { color: #374151; line-height: 1.5; }
 ```
 
-- [ ] **Step 5: build 验证**
+- [x] **Step 5: build 验证**
 
 Run: `cd ai-interview-frontend && npm run build`
 Expected: 构建成功，无语法错误
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add ai-interview-frontend/src/views/ResumeUpload.vue
