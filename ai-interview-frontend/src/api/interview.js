@@ -17,6 +17,13 @@ export async function startInterviewStream(data, onStatus, onQuestion, onDone, s
     signal
   })
 
+  // 非 200（401/5xx 等非 SSE body）→ 流静默结束会让 onDone/onError 不触发、UI 卡死，
+  // 必须抛错由 handleStart 的 catch 统一兜底
+  if (!response.ok) {
+    const detail = await response.text()
+    throw new Error(`面试启动失败 (HTTP ${response.status})${detail ? ': ' + detail : ''}`)
+  }
+
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let lineBuffer = ''      // SSE 行拆分缓冲

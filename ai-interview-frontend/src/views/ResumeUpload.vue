@@ -134,6 +134,12 @@
             <p class="tip-text" :key="startTip">💡 {{ startTip }}</p>
           </transition>
         </div>
+        <div v-if="streamedQuestions.length" class="streamed-questions">
+          <div v-for="(q, i) in streamedQuestions" :key="i" class="streamed-question">
+            <span class="q-index">{{ i + 1 }}</span>
+            <span class="q-text">{{ q.question }}</span>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -143,7 +149,7 @@
 import { ref, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { uploadResume, getResume } from '../api/resume'
-import { startInterview } from '../api/interview'
+import { startInterviewStream } from '../api/interview'
 
 const router = useRouter()
 const step = ref(1)
@@ -286,6 +292,7 @@ function scoreColor(score) {
 // 面试准备动画
 const startProgress = ref(0)
 const startingTitle = ref('AI 面试即将开始，请做好准备')
+const streamedQuestions = ref([])
 const startTip = ref('')
 let startTipTimer = null
 let startProgressTimer = null
@@ -340,21 +347,32 @@ async function handleStart() {
   error.value = ''
   starting.value = true
   step.value = 'starting'
+  streamedQuestions.value = []
   startStartingAnimation()
 
   try {
-    const data = await startInterview({
-      resume_id: resumeId.value,
-      target_position: targetPosition.value,
-      difficulty: difficulty.value,
-      total_questions: totalQuestions.value
-    })
-    // 完成动画
-    startProgress.value = 100
-    startingTitle.value = '面试准备完成！'
-    stopStartingAnimation()
-    await new Promise(r => setTimeout(r, 800))
-    router.push(`/interview/${data.interview_id}`)
+    await startInterviewStream(
+      {
+        resume_id: resumeId.value,
+        target_position: targetPosition.value,
+        difficulty: difficulty.value,
+        total_questions: totalQuestions.value
+      },
+      (msg) => { startingTitle.value = msg },
+      (questions) => {
+        // onQuestion 每次回调携带"已完整解析的整组题目"，只在长度增长时更新，避免每个 token 都重渲染
+        if (questions.length > streamedQuestions.value.length) {
+          streamedQuestions.value = questions
+        }
+      },
+      async (data) => {
+        startProgress.value = 100
+        startingTitle.value = '面试准备完成！'
+        stopStartingAnimation()
+        await new Promise(r => setTimeout(r, 800))
+        router.push(`/interview/${data.interview_id}`)
+      }
+    )
   } catch (e) {
     stopStartingAnimation()
     error.value = e.message
@@ -438,4 +456,10 @@ async function handleStart() {
 .analysis-two-col li::before, .analysis-section li::before {
   content: '•'; position: absolute; left: 0; color: #9ca3af;
 }
+
+/* 流式题目浮现 */
+.streamed-questions { margin-top: 16px; text-align: left; max-height: 180px; overflow-y: auto; }
+.streamed-question { display: flex; gap: 8px; padding: 8px 12px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 8px; font-size: 13px; }
+.q-index { flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%; background: #4f46e5; color: #fff; text-align: center; line-height: 20px; font-size: 12px; }
+.q-text { color: #374151; line-height: 1.5; }
 </style>
