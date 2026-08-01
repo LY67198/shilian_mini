@@ -116,3 +116,50 @@ class TestRetrievalCheckLoop:
             assert result.debug_info
             assert "rounds" in result.debug_info
             assert result.debug_info["total_retrieval_rounds"] >= 1
+
+
+@pytest.mark.asyncio
+class TestPositionAgentFullChain:
+    """PositionAgentService.run_agent 驱动 5 工具全链（含副作用清理）"""
+
+    RESUME_ID = 11  # 已完成简历，解析内容最完整
+
+    async def test_agent_full_chain(self):
+        from sqlalchemy import text
+
+        from app.db.base import get_session_local
+        from app.services.client.position_agent_service import position_agent_service
+
+        created_interview_ids: list[int] = []
+        try:
+            response = await position_agent_service.run_agent(
+                resume_id=self.RESUME_ID,
+                target_direction="Python 后端",
+            )
+            result = response.get("result", {})
+            assert "error" not in result, f"Agent 报错: {result.get('error')}"
+
+            assert "interview_result" in result, "最终输出应含 interview_result"
+            ir = result["interview_result"]
+            assert ir.get("interview_id"), "interview_result 应含 interview_id"
+            created_interview_ids.append(ir["interview_id"])
+            assert ir.get("first_question"), "interview_result 应含 first_question"
+            assert ir.get("total_questions", 0) > 0
+
+            steps = response.get("intermediate_steps", [])
+            tool_names = [s["tool"] for s in steps]
+            for expected in ["get_parsed_resume", "build_candidate_profile", "match_positions"]:
+                assert expected in tool_names, f"Agent 应调用 {expected}"
+        finally:
+            if created_interview_ids:
+                async with get_session_local()() as session:
+                    for iid in created_interview_ids:
+                        await session.execute(
+                            text("DELETE FROM interview_messages WHERE interview_id = :iid"),
+                            {"iid": iid},
+                        )
+                        await session.execute(
+                            text("DELETE FROM interviews WHERE id = :iid"),
+                            {"iid": iid},
+                        )
+                    await session.commit()
