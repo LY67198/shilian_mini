@@ -30,7 +30,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **试炼（MockPilot）** — 企业级 AI 模拟面试平台。围绕"简历解析 → 岗位匹配 → RAG 题库出题 → 多轮 LangGraph 面试 → AI 评分 → 结构化报告"构建的完整求职训练闭环。站在候选人立场，强调"反复练习锻造面试能力"。
 
-> **2026-08-01 Agent 正名**：`app/agents/` 目录已删除。原 BaseAgent/EvaluatorAgent/ReportAgent/QuestionAgent 四个类并非真 Agent（无工具调用、无 ReAct 循环），已内联到各 workflow node 中直接使用 `load_prompt() + get_chat_llm() + with_structured_output()`。全仓库唯一使用 LangChain `create_agent()` 的是 `position_agent_service.py`，但该 Agent 的 system prompt 锁死了工具调用顺序（固定 DAG），后续应拆 Agent 壳改为显式调用。
+> **2026-08-01 Agent 正名**：`app/agents/` 目录已删除。原 BaseAgent/EvaluatorAgent/ReportAgent/QuestionAgent 四个类并非真 Agent（无工具调用、无 ReAct 循环），已内联到各 workflow node 中直接使用 `load_prompt() + get_chat_llm() + with_structured_output()`。全仓库唯一使用 LangChain `create_agent()` 的是 `position_agent_service.py`，该 Agent 的 system prompt 锁死了工具调用顺序（固定 DAG）。**2026-08-01 头脑风暴改判：保留该 Agent 不拆壳**（功能卖点 + 拆壳回归风险 > 收益），仅修其真实 bug（`start_mock_interview` 重复建面试 → 幂等修复，spec 已出，见"待办"段）。
 
 技术栈：FastAPI + LangGraph + LangChain + pgvector + PostgreSQL + Redis + DeepSeek + DashScope。
 
@@ -482,10 +482,10 @@ cd ai-interview-admin && npm run build       # → dist/
 
 **其他问题**：
 - `rerank.py:39` 用 DashScope 同步 SDK 阻塞事件循环（async 函数内未 `asyncio.to_thread`，对比 BM25 在 pipeline.py:85 已卸线程）
-- position_agent 的 `start_mock_interview` 是写 DB 的副作用工具却挂在工具集里，LLM 可在任意时机重复调用（重复建面试风险）
+- position_agent 的 `start_mock_interview` 是写 DB 的副作用工具却挂在工具集里，LLM 可在任意时机重复调用（重复建面试风险）→ **2026-08-01 已出幂等修复 spec（topic 1，待实现）**
 - 岗位匹配改造二选一：**路线 A** 删掉 prompt 顺序约束、让 LLM 真决策（工具加前置校验）；**路线 B** 拆成显式边 LangGraph StateGraph 或普通 async 顺序调用（最诚实，面试话术见"项目介绍"相关章节）
 
-**修复路线（按优先级）**：~~P0-1 报告评分 → P0-2 BM25 构建~~ ✅ 已完成（2026-08-01）→ 岗位匹配拆 Agent 壳 → retrieval_check 降级纯函数 → 清剩余死代码（get_workflow_llm / DEFAULT_TOOLS / 孤儿 prompts / aembed_documents）。
+**修复路线（按优先级）**：~~P0-1 报告评分 → P0-2 BM25 构建~~ ✅ 已完成（2026-08-01）→ **~~岗位匹配拆 Agent 壳~~（已改判：保留 Agent，仅修重复建面试 bug → topic 1，spec 已出，待实现）** → retrieval_check 降级纯函数（topic 2，待设计）→ 清剩余死代码（topic 3，待设计：get_workflow_llm / DEFAULT_TOOLS / 孤儿 prompts / aembed_documents / rerank 事件循环阻塞）。
 
 **2026-08-01 已修复**：`app/agents/` 删除 + 逻辑内联（EvaluatorAgent → evaluate_node, ReportAgent → generate_report_node）+ `extract_json` 改 `with_structured_output(ReportResult)`。
 
@@ -494,3 +494,28 @@ cd ai-interview-admin && npm run build       # → dist/
 - 实施计划：`docs/superpowers/plans/2026-08-01-p0-critical-bugs-implementation.md`（7 Tasks / 4 files）
 - 执行方式：Subagent-Driven Development
 - 验证：35/35 unit tests pass + smoke test（BM25 32+84 文档，search 返回 PG 主键）
+
+### 待办 — 2026-08-01 头脑风暴产出（下次执行）
+
+> 三个话题按序处理。**topic 1 设计已完成（spec 已提交 dev），topic 2/3 待设计。** 实现全部留待下次会话执行。
+> 深度审计报告：`docs/superpowers/specs/2026-08-01-architecture-review-refactors-audit.md`（三话题代码事实、风险、推荐方案）。
+
+**Topic 1：岗位匹配幂等修复（保留 Agent 不拆壳）** — 设计完成，待实现
+- Spec：`docs/superpowers/specs/2026-08-01-position-agent-interview-idempotency-design.md`（commit `c03d88a`）
+- 决策：保留 `create_agent`/prompt/ReAct 全不动；幂等检查放 `start_mock_interview` 工具内部（唯一汇聚点，覆盖 LLM 与端点两条路径）
+- 改动：`interview_repo.py` 新增 `get_active_by_position()`；`position_agent_tools.py` 的 `start_mock_interview` 创建前查已有 in_progress 面试 → 返回 `{existing: True, interview_id, ...}`
+- 幂等键 `(user_id, resume_id, target_position=title)`，无迁移、无 API/前端变更
+- 测试：新增 `tests/unit/test_position_agent_idempotency.py`（4 用例）
+
+**Topic 2：retrieval_check 降级纯函数** — 待设计
+- 把 `workflows/retrieval_check/` 的 StateGraph 折叠为普通 async while 循环（审计确认删 graph.py/state.py/nodes 脚手架 ~180 行）
+- 保留 `RetrievalCheckResult{final_context, debug_info}` 契约 + 2 个 YAML prompt（reason→rewrite-strategy 是真正价值）
+- 需精确复刻 4 个兜底语义：空结果 too_few / LLM check 失败 ok / rewrite 失败保原文 / max_retries=2 边界（3 检索轮 + 2 重写）
+- 顺带：`is_first_call` 门控 bug（HITL resume 后后续问题知识注入为空）+ `debug_info` 被丢弃
+
+**Topic 3：死代码清理 5 项** — 待设计
+- `get_workflow_llm`（`_shared/llm.py`）+ `DEFAULT_TOOLS`（`_shared/tools.py`）→ 删除，**必须同步改 `_shared/__init__.py:18,23,26,34`** 否则启动 ImportError
+- 孤儿 prompts `evaluate_answer.yaml` / `generate_report.yaml` → 删除（live 用 `evaluator_agent` / `report_agent`）
+- `embed_text_sync` / `embed_texts_sync`（`app/llm/embedding.py`，含 `aembed_documents` 未 await 笔误）→ 删除，**必须同步改 `app/llm/__init__.py:14-15,25-26`**
+- `rerank.py:39` DashScope 同步 SDK 阻塞事件循环 → `asyncio.to_thread`（对比 pipeline.py:85 BM25 已卸线程）
+- 全部零调用者或 mock 覆盖，期望测试无改动
