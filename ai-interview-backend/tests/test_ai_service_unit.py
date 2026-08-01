@@ -63,3 +63,27 @@ class TestExtractJson:
         assert result["score"] == 7.5
         assert result["extras"]["follow_up"] is True
         assert result["extras"]["tags"] == ["a", "b"]
+
+
+@pytest.mark.unit
+class TestAsQuestionList:
+    """generate_questions 结果归一化 — 防止 dict/parse_failed 兜底导致 setdefault AttributeError"""
+
+    def test_list_passthrough(self):
+        result = [{"question": "Q1"}, {"question": "Q2"}]
+        assert AIService._as_question_list(result) == result
+
+    def test_dict_with_questions_key(self):
+        result = {"questions": [{"question": "Q1"}]}
+        assert AIService._as_question_list(result) == [{"question": "Q1"}]
+
+    def test_parse_failed_fallback_dict_returns_empty(self):
+        result = {"score": 5.0, "feedback": "x", "parse_failed": True}
+        assert AIService._as_question_list(result) == []
+
+    def test_non_list_non_dict_returns_empty(self):
+        assert AIService._as_question_list("garbage") == []
+
+    def test_filters_non_dict_items(self):
+        result = [{"question": "Q1"}, "not-a-dict"]
+        assert AIService._as_question_list(result) == [{"question": "Q1"}]

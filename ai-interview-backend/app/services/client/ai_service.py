@@ -75,6 +75,25 @@ class AIService:
         from app.common.json_utils import extract_json
         return extract_json(text)
 
+    @staticmethod
+    def _as_question_list(result) -> list:
+        """将 extract_json 结果归一化为题目 list（dict/list 均可）。
+
+    Args:
+        result: extract_json 的输出，可能是 list、dict 或其他类型。
+
+    Returns:
+        只含 dict 元素的题目列表；无法归一化时返回空列表。
+    """
+        if isinstance(result, list):
+            return [q for q in result if isinstance(q, dict)]
+        if isinstance(result, dict):
+            for key in ("questions", "items"):
+                val = result.get(key)
+                if isinstance(val, list):
+                    return [q for q in val if isinstance(q, dict)]
+        return []
+
     # ── 出题方法（YAML prompt）─────────────────────────────────────
 
     async def parse_resume(self, resume_text: str) -> dict:
@@ -173,7 +192,7 @@ class AIService:
             "count": count,
         })
         content = result.content if hasattr(result, "content") else str(result)
-        return self._extract_json(content)
+        return self._as_question_list(self._extract_json(content))
 
     async def select_and_adapt_questions(
         self,
@@ -257,7 +276,7 @@ class AIService:
             "seed_json": json.dumps(seed_questions, ensure_ascii=False),
         })
         content = result.content if hasattr(result, "content") else str(result)
-        return self._extract_json(content)
+        return self._as_question_list(self._extract_json(content))
 
 
 ai_service = AIService()
