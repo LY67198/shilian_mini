@@ -16,13 +16,33 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.client.deps import get_current_user
 from app.db.session import get_db
 from app.deps import get_interview_service
+from app.exceptions.http_exceptions import NotFoundError
 from app.models.user import User
+from app.repositories.interview_repo import interview_repo
 from app.schemas.client.interview import InterviewStart, AnswerSubmit
 from app.schemas.response import ApiResponse
 from app.services.client.interview_service import InterviewService
 from app.workflows.interview.service import submit_answer as submit_answer_to_graph
 
 router = APIRouter()
+
+
+async def _assert_owned_active(
+    db: AsyncSession, user_id: int, interview_id: int
+) -> None:
+    """校验面试归属权 + 进行中状态。
+
+    Args:
+        db: 数据库会话。
+        user_id: 当前用户 ID。
+        interview_id: 面试主键。
+
+    Raises:
+        NotFoundError: 面试不存在、不属于当前用户、或已 completed。
+    """
+    interview = await interview_repo.get_by_id_for_user(db, interview_id, user_id)
+    if not interview or interview.status != "in_progress":
+        raise NotFoundError(message="面试记录不存在")
 
 
 @router.post("/start")
