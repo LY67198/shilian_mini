@@ -21,6 +21,7 @@ from app.core.log_config import setup_logging, shutdown_logging, is_master_proce
 from app.services.common.redis import redis_client
 from app.services.common.thread_pool import thread_pool_service
 from app.db.base import close_db_engine
+from app.workflows._shared.checkpointer import close_checkpointer
 import logging
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ async def lifespan(application: FastAPI):
         shutdown_logging()  # 关闭日志
         # shutdown_scheduler()  # 关闭定时任务调度器
     await close_db_engine()  # 清理数据库引擎
+    await close_checkpointer()  # 关闭 LangGraph checkpointer 连接池
     await redis_client.close()  # 关闭Redis连接
     thread_pool_service.shutdown()  # 关闭邮件线程池
     logger.info("Application shutting down")
