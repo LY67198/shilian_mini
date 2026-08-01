@@ -15,6 +15,15 @@ class ScoreResult(BaseModel):
     follow_up: bool = Field(default=False, description="是否需要追问")
 
 
+class ReportResult(BaseModel):
+    """面试报告结构化输出"""
+    summary: str = Field(default="", description="摘要，100字以内")
+    strengths: list[str] = Field(default_factory=list, description="优势列表")
+    weaknesses: list[str] = Field(default_factory=list, description="不足列表")
+    suggestions: list[str] = Field(default_factory=list, description="改进建议列表")
+    hire_recommendation: str = Field(default="", description="录用评价")
+
+
 class InterviewState(BaseWorkflowState, total=False):
     """面试 workflow state
 
