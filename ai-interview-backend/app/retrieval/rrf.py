@@ -29,18 +29,21 @@ def rrf_fuse(
     """
     rrf_scores: dict[int, float] = {}
     content_map: dict[int, str] = {}
+    metadata_map: dict[int, dict] = {}
     sources: dict[int, list[str]] = {}
 
     for rank, item in enumerate(vector_results, start=1):
         score_contribution = 1.0 / (k + rank)
         rrf_scores[item.id] = rrf_scores.get(item.id, 0.0) + score_contribution
         content_map.setdefault(item.id, item.content)
+        metadata_map.setdefault(item.id, item.metadata or {})
         sources.setdefault(item.id, []).append("vector")
 
     for rank, item in enumerate(bm25_results, start=1):
         score_contribution = 1.0 / (k + rank)
         rrf_scores[item.id] = rrf_scores.get(item.id, 0.0) + score_contribution
         content_map.setdefault(item.id, item.content)
+        metadata_map.setdefault(item.id, item.metadata or {})
         sources.setdefault(item.id, []).append("bm25")
 
     merged: list[SearchResult] = []
@@ -51,6 +54,7 @@ def rrf_fuse(
             id=item_id,
             content=content_map.get(item_id, ""),
             score=rrf_scores[item_id],
+            metadata=metadata_map.get(item_id, {}),
             source=label,
         ))
 

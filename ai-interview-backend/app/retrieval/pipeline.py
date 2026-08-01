@@ -90,6 +90,7 @@ class RetrievalPipeline:
                     id=idx,
                     content=self._bm25.get_text(idx),
                     score=score,
+                    metadata=self._bm25.get_metadata(idx),
                     source="bm25",
                 )
                 for idx, score in bm25_raw

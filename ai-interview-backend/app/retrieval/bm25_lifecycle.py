@@ -35,15 +35,28 @@ async def build_bm25_indices(db_session) -> None:
     knowledge_bm25 = BM25Index("knowledge_chunks")
     knowledge_bm25.build(knowledge_items)
 
-    # Build question bank index — SELECT id + question + reference_answer
+    # Build question bank index — SELECT id + question + full metadata
     result = await db_session.execute(
-        select(QuestionBank.id, QuestionBank.question, QuestionBank.reference_answer)
+        select(
+            QuestionBank.id,
+            QuestionBank.question,
+            QuestionBank.reference_answer,
+            QuestionBank.key_points,
+            QuestionBank.difficulty,
+            QuestionBank.position_tag,
+        )
     )
     q_items = []
-    for qid, question, answer in result.fetchall():
+    for qid, question, answer, key_points, difficulty, position_tag in result.fetchall():
         text = f"{question or ''} {answer or ''}".strip()
         if text:
-            q_items.append((qid, text))
+            q_items.append((qid, text, {
+                "question": question,
+                "reference_answer": answer,
+                "key_points": key_points,
+                "difficulty": difficulty,
+                "position_tag": position_tag,
+            }))
     question_bank_bm25 = BM25Index("question_bank")
     question_bank_bm25.build(q_items)
 

@@ -29,22 +29,29 @@ class BM25Index:
         self._collection_name = collection_name
         self._corpus: list[str] = []
         self._ids: list[int] = []
+        self._metas: list[dict] = []
         self._index: Optional[BM25Okapi] = None
 
-    def build(self, items: list[tuple[int, str]] | None) -> None:
-        """Build BM25Okapi index from (pg_id, text) pairs.
+    def build(
+        self,
+        items: list[tuple[int, str]] | list[tuple[int, str, dict]] | None,
+    ) -> None:
+        """Build BM25Okapi index from (pg_id, text[, metadata]) pairs.
 
         Args:
-            items: List of (pg_id, text) pairs. None or empty list clears the index.
+            items: List of (pg_id, text) or (pg_id, text, metadata) pairs.
+                None or empty list clears the index.
         """
         if not items:
             self._corpus = []
             self._ids = []
+            self._metas = []
             self._index = None
             return
 
         self._ids = [item[0] for item in items]
         self._corpus = [item[1] for item in items]
+        self._metas = [item[2] if len(item) > 2 else {} for item in items]
         tokenized = [self._tokenize(t) for t in self._corpus]
         self._index = BM25Okapi(tokenized)
 
@@ -85,6 +92,21 @@ class BM25Index:
             return self._corpus[idx]
         except ValueError:
             return ""
+
+    def get_metadata(self, pg_id: int) -> dict:
+        """Get metadata dict by PG primary key.
+
+        Args:
+            pg_id: PostgreSQL primary key of the document.
+
+        Returns:
+            Metadata dict, or {} if pg_id is not found.
+        """
+        try:
+            idx = self._ids.index(pg_id)
+            return self._metas[idx]
+        except ValueError:
+            return {}
 
     @property
     def corpus_size(self) -> int:

@@ -129,6 +129,27 @@ class TestBM25Index:
         tokens = idx._tokenize("hello world")
         assert len(tokens) > 0
 
+    def test_build_with_metadata(self):
+        from app.retrieval.bm25 import BM25Index
+        idx = BM25Index("test")
+        idx.build([
+            (10, "Python async guide", {"reference_answer": "ans10", "difficulty": "medium"}),
+            (20, "Java concurrency", {"reference_answer": "ans20"}),
+            (30, "Python web Django"),  # 兼容两元组
+        ])
+        assert idx.get_metadata(10)["reference_answer"] == "ans10"
+        assert idx.get_metadata(20) == {"reference_answer": "ans20"}
+        assert idx.get_metadata(30) == {}
+        assert idx.get_metadata(999) == {}
+
+    def test_build_none_clears_metadata(self):
+        from app.retrieval.bm25 import BM25Index
+        idx = BM25Index("test")
+        idx.build([(1, "text", {"a": 1})])
+        assert idx.get_metadata(1) == {"a": 1}
+        idx.build(None)
+        assert idx.get_metadata(1) == {}
+
 
 @pytest.mark.unit
 class TestRRF:
@@ -164,6 +185,15 @@ class TestRRF:
         bm25 = [SearchResult(id=5, content="E", score=0.9, source="bm25")]
         result = rrf_fuse([], bm25, k=60)
         assert len(result) == 1 and result[0].id == 5
+
+    def test_preserves_metadata_through_fusion(self):
+        from app.retrieval.rrf import rrf_fuse
+        vector = [SearchResult(id=1, content="A", score=0.9, metadata={"reference_answer": "ra"})]
+        bm25 = [SearchResult(id=2, content="B", score=0.8, metadata={"reference_answer": "rb"})]
+        result = rrf_fuse(vector, bm25, k=60)
+        by_id = {r.id: r for r in result}
+        assert by_id[1].metadata.get("reference_answer") == "ra"
+        assert by_id[2].metadata.get("reference_answer") == "rb"
 
 
 @pytest.mark.unit
@@ -255,3 +285,22 @@ class TestRetrievalPipeline:
 
         results = await pipeline.search(query="test")
         assert len(results) >= 1
+
+    async def test_bm25_only_result_carries_metadata(self, monkeypatch):
+        from app.retrieval.pipeline import RetrievalPipeline
+        from app.retrieval.bm25 import BM25Index
+        bm25 = BM25Index("test")
+        bm25.build([(7, "unique term abcdefgh", {"reference_answer": "ra7"})])
+        pipeline = RetrievalPipeline(
+            session=None, collection="question_bank", bm25_index=bm25,
+            enable_rerank=False, final_top_k=4,
+        )
+
+        async def mock_vector(session, query, collection, top_k, filters=None):
+            return []  # 向量召回为空 → 仅 BM25 命中
+        monkeypatch.setattr("app.retrieval.pipeline.vector_search", mock_vector)
+
+        results = await pipeline.search(query="unique term abcdefgh")
+        assert len(results) == 1
+        assert results[0].source == "bm25"
+        assert results[0].metadata.get("reference_answer") == "ra7"
