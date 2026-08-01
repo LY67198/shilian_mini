@@ -1,40 +1,121 @@
-"""evaluate node — 委托 EvaluatorAgent 评分"""
+"""evaluate node — use prompt | llm.with_structured_output to score and persist to DB"""
 from __future__ import annotations
 
+import json
 import logging
 
 from langchain_core.runnables import RunnableConfig
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.evaluator_agent import EvaluatorAgent
-from app.workflows.interview.state import InterviewState
+from app.llm import get_chat_llm
+from app.llm.prompts import load_prompt
+from app.models.interview_message import InterviewMessage
+from app.workflows.interview.state import InterviewState, ScoreResult
 
 logger = logging.getLogger(__name__)
 
 
 async def evaluate_node(state: InterviewState, config: RunnableConfig) -> dict:
-    """评估候选人回答，委托 EvaluatorAgent。
+    """Evaluate candidate answer and persist score to InterviewMessage.
+
+    Uses prompt | llm.with_structured_output(ScoreResult) for structured scoring.
+    After evaluation, writes score/feedback/question_index back to the latest
+    unscored candidate message so generate_report_node can find them via
+    get_scored_messages().
 
     Args:
-        state: 当前 InterviewState，需含 current_question / answer / resume_context /
-            chat_history；可选 reference_answer / key_points / knowledge_context。
-        config: RunnableConfig，可选含 evaluator_agent（缺省则即时 new 一个）。
+        state: Current InterviewState. Must contain current_question / answer /
+            resume_context / chat_history; optional reference_answer / key_points /
+            knowledge_context.
+        config: RunnableConfig with configurable.db (AsyncSession).
 
     Returns:
-        写入 state 的字典，含 score / feedback。
+        Dict with score / feedback for LangGraph state update.
     """
-    agent: EvaluatorAgent = config["configurable"].get("evaluator_agent", EvaluatorAgent())
+    # Build conversation history text
+    history_text = ""
+    chat_history = state.get("chat_history", [])
+    for msg in chat_history[-6:]:
+        role = "面试官" if msg.get("role") == "interviewer" else "候选人"
+        history_text += f"{role}: {msg.get('content', '')}\n"
 
-    result = await agent.evaluate(
-        question=state.get("current_question", ""),
-        answer=state.get("answer", ""),
-        resume_context=state.get("resume_context", {}),
-        chat_history=state.get("chat_history", []),
-        reference_answer=state.get("reference_answer"),
-        key_points=state.get("key_points"),
-        knowledge_context=state.get("knowledge_context", []),
+    # Reference material block
+    reference_answer = state.get("reference_answer")
+    key_points = state.get("key_points")
+    ref_block = ""
+    if reference_answer:
+        ref_block += f"\n【参考答案要点（评分依据，不要直接读给候选人）】：\n{reference_answer}\n"
+    if key_points:
+        ref_block += f"\n【关键采分点】：{json.dumps(key_points, ensure_ascii=False)}\n"
+
+    knowledge_context = state.get("knowledge_context", [])
+    kb_block = ""
+    if knowledge_context:
+        kb_block = (
+            "\n【相关知识库片段（评分参考，不要直接读给候选人）】：\n"
+            + "\n---\n".join(knowledge_context)
+            + "\n"
+        )
+
+    scoring_hint = (
+        "评分时请对照【参考答案要点】与【相关知识库片段】，候选人答中要点越多分越高。\n"
+        if (ref_block or kb_block)
+        else ""
     )
 
-    return {
-        "score": result.score,
-        "feedback": result.feedback,
+    variables = {
+        "question": state.get("current_question", ""),
+        "answer": state.get("answer", ""),
+        "resume_json": json.dumps(state.get("resume_context", {}), ensure_ascii=False),
+        "history_text": history_text,
+        "ref_block": ref_block,
+        "kb_block": kb_block,
+        "scoring_hint": scoring_hint,
     }
+
+    try:
+        prompt = load_prompt("evaluator_agent")
+        llm = get_chat_llm(temperature=0.3)
+        structured_llm = llm.with_structured_output(ScoreResult, method="json_mode")
+        chain = prompt | structured_llm
+        result: ScoreResult = await chain.ainvoke(variables)
+    except Exception as e:
+        logger.error(f"Structured scoring failed, returning fallback: {e}")
+        return {"score": 5.0, "feedback": f"评分异常，已记录: {str(e)[:100]}"}
+
+    # Persist score to the latest unscored candidate message
+    db: AsyncSession = config["configurable"]["db"]
+    try:
+        stmt = (
+            select(InterviewMessage)
+            .where(
+                InterviewMessage.interview_id == state["interview_id"],
+                InterviewMessage.role == "candidate",
+                InterviewMessage.score.is_(None),
+            )
+            .order_by(InterviewMessage.id.desc())
+            .limit(1)
+        )
+        result_set = await db.execute(stmt)
+        msg = result_set.scalar_one_or_none()
+        if msg is not None:
+            msg.score = result.score
+            msg.feedback = result.feedback
+            msg.question_index = state.get("current_index", 0)
+            await db.commit()
+            logger.debug(
+                "Score persisted: interview=%d msg=%d score=%.1f",
+                state["interview_id"],
+                msg.id,
+                result.score,
+            )
+        else:
+            logger.warning(
+                "No unscored candidate message found for interview=%d",
+                state["interview_id"],
+            )
+    except Exception as e:
+        logger.error("Failed to persist score to InterviewMessage: %s", e)
+
+    return {"score": result.score, "feedback": result.feedback}
