@@ -1,6 +1,6 @@
 """LangGraph 工作流共享基础设施
 
-Phase 1 引入，所有 workflow（interview / question_gen / evaluation）共用：
+Phase 1 引入，所有 workflow（interview / retrieval_check）共用：
 - `checkpointer`   — AsyncPostgresSaver 单例 + schema 初始化
 - `state_base`     — 公共 TypedDict 字段（thread_id / retry_count / errors）
 - `tracing`        — LangSmith 配置（默认 off）

@@ -50,8 +50,8 @@ async def submit_answer(
     graph = await get_compiled_graph()
     checkpointer = graph.checkpointer
 
-    # Determine if this is the first call BEFORE building config
-    # (retrieval_check_service needs this flag)
+    # Determine first call vs HITL resume — only used to choose
+    # ainvoke(initial_state) vs Command(resume=state_data)
     checkpoint = await checkpointer.aget(
         {"configurable": {"thread_id": f"interview-{interview_id}"}}
     )
