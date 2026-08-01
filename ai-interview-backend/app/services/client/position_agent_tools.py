@@ -81,34 +81,15 @@ async def build_candidate_profile(parsed_resume: dict) -> dict:
     if not parsed_resume:
         return {"error": "parsed_resume 为空"}
 
+    from app.llm.prompts import load_prompt
+    prompt = load_prompt("position_candidate_profile")
     messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是一个资深技术面试官 + HR 顾问。"
-                "请根据候选人结构化简历，提炼成画像信息。\n"
-                "必须返回纯 JSON 格式（不要 markdown 代码块），包含字段：\n"
-                '{\n'
-                '  "experience_level": "campus / junior / mid / senior",\n'
-                '  "primary_stack": ["核心技术栈，最多 8 个"],\n'
-                '  "secondary_stack": ["次要技术栈"],\n'
-                '  "project_directions": ["项目方向标签，如 电商后端 / AI应用 / 数据分析"],\n'
-                '  "strong_points": ["3 条具体优势"],\n'
-                '  "weak_points": ["3 条具体不足"],\n'
-                '  "position_hints": ["建议匹配的岗位标签，如 python_backend / vue_frontend"]\n'
-                '}\n'
-                "评估标准：\n"
-                "- 在校学生 / 应届生只有实习经历 → campus\n"
-                "- 1-3 年经验 → junior\n"
-                "- 3-5 年经验 → mid\n"
-                "- 5 年以上 → senior\n"
-                "position_hints 候选值（必须在内）：python_backend / java_backend / vue_frontend "
-                "/ react_frontend / ai_application / fullstack / mobile_android / devops"
-            ),
-        },
+        {"role": "system", "content": prompt.messages[0].prompt.template},
         {
             "role": "user",
-            "content": f"候选人简历：\n{json.dumps(parsed_resume, ensure_ascii=False)}",
+            "content": prompt.messages[-1].prompt.template.format(
+                parsed_resume=json.dumps(parsed_resume, ensure_ascii=False)
+            ),
         },
     ]
     raw = await ai_service._chat(messages, temperature=0.3)
