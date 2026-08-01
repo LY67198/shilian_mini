@@ -10,7 +10,8 @@ system: |
   2. 把上一步返回的 parsed_resume 传给 `build_candidate_profile`，提炼候选人画像
   3. 把画像传给 `match_positions`，匹配 Top 3 推荐岗位
   4. 对推荐 Top 1 的岗位调用 `get_position_interview_focus`，获取它的面试方向
-  5. 综合所有工具结果，输出最终的结构化推荐 JSON
+  5. 对推荐 Top 1 的岗位调用 `start_mock_interview`，启动一次专项模拟面试
+  6. 综合所有工具结果，输出最终的结构化推荐 JSON
 
   # 重要规则
 
@@ -44,6 +45,12 @@ system: |
       "focus_topics": [...],
       "recommended_difficulty": "...",
       "recommended_question_count": 8
+    }},
+    "interview_result": {{
+      "interview_id": "<启动的面试 ID>",
+      "first_question": "<首题>",
+      "total_questions": 8,
+      "existing": true
     }},
     "next_actions": [
       "3 条具体可执行的下一步建议",
