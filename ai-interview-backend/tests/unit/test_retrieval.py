@@ -20,7 +20,7 @@ class TestVectorSearch:
 
         class MockKnowledge:
             @staticmethod
-            def search(client, query_vector, top_k, document_ids=None, min_score=0.0):
+            async def search(session, query_vector, top_k, document_ids=None, min_score=0.0):
                 return [
                     {"id": 1, "content": "chunk one", "similarity": 0.9,
                      "document_id": 10, "chunk_index": 0, "content_hash": "a", "metadata": {}},
@@ -29,7 +29,7 @@ class TestVectorSearch:
         monkeypatch.setitem(_COLLECTION_MAP, "knowledge_chunks", MockKnowledge)
 
         results = await vector_search(
-            client=None,
+            session=None,
             query="test query",
             collection="knowledge_chunks",
             top_k=4,
@@ -54,14 +54,14 @@ class TestVectorSearch:
 
         class MockQuestionBank:
             @staticmethod
-            def search(client, query_vector, top_k, position_tag=None, difficulty=None, min_score=0.7):
+            async def search(session, query_vector, top_k, position_tag=None, difficulty=None, min_score=0.7):
                 captured.update({"position_tag": position_tag, "difficulty": difficulty})
                 return []
 
         monkeypatch.setitem(_COLLECTION_MAP, "question_bank", MockQuestionBank)
 
         await vector_search(
-            client=None,
+            session=None,
             query="Python",
             collection="question_bank",
             top_k=10,
@@ -80,7 +80,7 @@ class TestVectorSearch:
         monkeypatch.setattr("app.retrieval.vector.embed_text", mock_embed)
 
         results = await vector_search(
-            client=None,
+            session=None,
             query="test",
             collection="nonexistent",
             top_k=5,
@@ -223,10 +223,10 @@ class TestRetrievalPipeline:
         from app.retrieval import SearchResult
         bm25 = BM25Index("test")
         bm25.build([(1, "doc one"), (2, "doc two"), (3, "doc three")])
-        pipeline = RetrievalPipeline(client=None, collection="knowledge_chunks", bm25_index=bm25, vector_top_k=3, bm25_top_k=3, final_top_k=2, enable_rerank=True)
+        pipeline = RetrievalPipeline(session=None, collection="knowledge_chunks", bm25_index=bm25, vector_top_k=3, bm25_top_k=3, final_top_k=2, enable_rerank=True)
 
         call_order = []
-        async def mock_vector(client, query, collection, top_k, filters=None):
+        async def mock_vector(session, query, collection, top_k, filters=None):
             call_order.append("vector")
             return [SearchResult(id=1, content="vec result 1", score=0.9, source="vector"), SearchResult(id=2, content="vec result 2", score=0.7, source="vector")]
         monkeypatch.setattr("app.retrieval.pipeline.vector_search", mock_vector)
@@ -247,9 +247,9 @@ class TestRetrievalPipeline:
         from app.retrieval import SearchResult
         bm25 = BM25Index("test")
         bm25.build([(1, "doc one"), (2, "doc two")])
-        pipeline = RetrievalPipeline(client=None, collection="knowledge_chunks", bm25_index=bm25, enable_rerank=False, final_top_k=4)
+        pipeline = RetrievalPipeline(session=None, collection="knowledge_chunks", bm25_index=bm25, enable_rerank=False, final_top_k=4)
 
-        async def mock_vector(client, query, collection, top_k, filters=None):
+        async def mock_vector(session, query, collection, top_k, filters=None):
             return [SearchResult(id=1, content="vec", score=0.9, source="vector")]
         monkeypatch.setattr("app.retrieval.pipeline.vector_search", mock_vector)
 
