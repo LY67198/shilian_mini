@@ -9,47 +9,54 @@ from rank_bm25 import BM25Okapi
 class BM25Index:
     """BM25 keyword search index using character bigram tokenization.
 
+    Stores (pg_id, text) pairs so that search results carry PostgreSQL
+    primary keys, enabling correct RRF fusion with vector search results.
+
     Usage::
 
         idx = BM25Index("my_collection")
-        idx.build(corpus)
+        idx.build([(1, "text one"), (2, "text two")])
         results = idx.search("query text", top_k=20)
+        # results: [(pg_id, score), ...]
     """
 
     def __init__(self, collection_name: str) -> None:
-        """初始化 BM25 索引实例。
+        """Initialize BM25 index instance.
 
         Args:
-            collection_name: 集合名称标识，用于日志和调试。
+            collection_name: Collection name for logging / debugging.
         """
         self._collection_name = collection_name
         self._corpus: list[str] = []
+        self._ids: list[int] = []
         self._index: Optional[BM25Okapi] = None
 
-    def build(self, texts: list[str] | None) -> None:
-        """Build BM25Okapi index from a corpus of texts.
+    def build(self, items: list[tuple[int, str]] | None) -> None:
+        """Build BM25Okapi index from (pg_id, text) pairs.
 
         Args:
-            texts: List of text documents. None or empty list clears the index.
+            items: List of (pg_id, text) pairs. None or empty list clears the index.
         """
-        if not texts:
+        if not items:
             self._corpus = []
+            self._ids = []
             self._index = None
             return
 
-        self._corpus = list(texts)
+        self._ids = [item[0] for item in items]
+        self._corpus = [item[1] for item in items]
         tokenized = [self._tokenize(t) for t in self._corpus]
         self._index = BM25Okapi(tokenized)
 
     def search(self, query: str, top_k: int = 20) -> list[tuple[int, float]]:
-        """Search the index and return top_k (corpus_index, score) pairs.
+        """Search the index and return top_k (pg_id, score) pairs.
 
         Args:
             query: Raw query string.
             top_k: Maximum number of results.
 
         Returns:
-            List of (corpus_index, bm25_score) sorted by score descending.
+            List of (pg_id, bm25_score) sorted by score descending.
             Empty list if the index is not built.
         """
         if self._index is None:
@@ -58,24 +65,26 @@ class BM25Index:
         tokenized_query = self._tokenize(query)
         scores = self._index.get_scores(tokenized_query)
 
-        # Pair (index, score) and sort by score descending
-        scored = [(i, float(s)) for i, s in enumerate(scores)]
+        # Pair (pg_id, score) and sort by score descending
+        scored = [(self._ids[i], float(s)) for i, s in enumerate(scores)]
         scored.sort(key=lambda x: x[1], reverse=True)
 
         return scored[:top_k]
 
-    def get_text(self, idx: int) -> str:
-        """Get original corpus text by index.
+    def get_text(self, pg_id: int) -> str:
+        """Get original corpus text by PG primary key.
 
         Args:
-            idx: Corpus index.
+            pg_id: PostgreSQL primary key of the document.
 
         Returns:
-            Original text string, or empty string if index is out of bounds.
+            Original text string, or empty string if pg_id is not found.
         """
-        if 0 <= idx < len(self._corpus):
+        try:
+            idx = self._ids.index(pg_id)
             return self._corpus[idx]
-        return ""
+        except ValueError:
+            return ""
 
     @property
     def corpus_size(self) -> int:
