@@ -11,8 +11,6 @@ from app.llm.client import chat_completion, get_chat_llm, reset_cache
 from app.llm.embedding import (
     embed_text,
     embed_texts,
-    embed_text_sync,
-    embed_texts_sync,
 )
 from app.llm.prompts import get_prompt_metadata, list_prompts, load_prompt
 
@@ -22,8 +20,6 @@ __all__ = [
     "reset_cache",
     "embed_text",
     "embed_texts",
-    "embed_text_sync",
-    "embed_texts_sync",
     "load_prompt",
     "list_prompts",
     "get_prompt_metadata",
