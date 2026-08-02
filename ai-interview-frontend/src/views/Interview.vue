@@ -120,7 +120,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import { submitAnswerStream, getMessages } from '../api/interview'
+import { submitAnswerStream, getMessages, tryParseStreamObject } from '../api/interview'
 
 const route = useRoute()
 const authStore = useAuthStore()
@@ -159,12 +159,7 @@ const userInitial = computed(() => {
 
 function renderContent(text) {
   if (!text) return ''
-  // 实时过滤AI返回的JSON评分数据，避免流式输出时闪现
-  let cleaned = text
-    .replace(/```json\s*\{[\s\S]*?\}\s*```/g, '')
-    .replace(/\{[^{}]*"score"\s*:\s*[\d.]+[^{}]*\}/g, '')
-    .trim()
-  return cleaned.replace(/\n/g, '<br>')
+  return text.replace(/\n/g, '<br>')
 }
 
 function scrollToBottom() {
@@ -213,7 +208,7 @@ async function handleSubmit() {
   scrollToBottom()
   thinking.value = true
   streamingText.value = ''
-  let rawStreamText = ''  // 保存原始完整文本用于最终提取
+  let feedbackJsonBuffer = ''  // LLM 流式输出的 JSON 原文累积缓冲
 
   // 为每次提交创建独立的 AbortController
   if (abortController) abortController.abort()
@@ -222,32 +217,26 @@ async function handleSubmit() {
   try {
     await submitAnswerStream(interviewId, myAnswer,
       (chunk) => {
-        rawStreamText += chunk
-        // 实时过滤：去掉已完成的JSON块和正在构建中的JSON片段（以```json或裸{开头的尾部）
-        let display = rawStreamText
-          .replace(/```json\s*\{[\s\S]*?\}\s*```/g, '')
-          .replace(/\{[^{}]*"score"\s*:\s*[\d.]+[^{}]*\}/g, '')
-        // 过滤尾部不完整的JSON片段（```json...未闭合 或 {"sco...未闭合）
-        display = display.replace(/```json[\s\S]*$/g, '')
-        display = display.replace(/\{[^}]*$/g, function(match) {
-          // 只过滤看起来像JSON评分的不完整片段
-          return /["']?score/.test(match) || /^\{\s*$/.test(match) ? '' : match
-        })
-        streamingText.value = display.trim()
+        feedbackJsonBuffer += chunk
+        const parsed = tryParseStreamObject(feedbackJsonBuffer)
+        if (!parsed) return
+        if (parsed.feedback) {
+          // evaluate 阶段：feedback 评语逐字出现
+          streamingText.value = parsed.feedback
+        } else if (parsed.summary || parsed.hire_recommendation) {
+          // generate_report 阶段：报告摘要逐字出现
+          streamingText.value = parsed.summary
+            ? '📋 报告摘要：' + parsed.summary
+            : '💡 录用评价：' + parsed.hire_recommendation
+        }
         scrollToBottom()
       },
       (data) => {
-        if (rawStreamText.trim()) {
-          let displayText = rawStreamText
-            .replace(/```json\s*\{[\s\S]*?\}\s*```/g, '')
-            .replace(/\{[^{}]*"score"\s*:\s*[\d.]+[^{}]*\}/g, '')
-            .trim()
-          if (displayText) {
-            messages.value.push({ role: 'interviewer', content: displayText, score: data.score })
-          }
+        if (data.feedback) {
+          messages.value.push({ role: 'interviewer', content: data.feedback, score: data.score })
         }
         streamingText.value = ''
-        rawStreamText = ''
+        feedbackJsonBuffer = ''
         const lastCandidate = [...messages.value].reverse().find(m => m.role === 'candidate')
         if (lastCandidate) lastCandidate.score = data.score
 

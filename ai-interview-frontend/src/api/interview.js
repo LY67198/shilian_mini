@@ -91,6 +91,28 @@ function tryParseQuestions(buffer) {
   }
 }
 
+// 对象型增量 JSON 解析：能解出多少字段就返回多少（SSE 流式反馈/报告用）。
+// 与 tryParseQuestions（数组，补右括号）互补：这里是对象，用字段正则提取
+// 已闭合/正在闭合的字符串字段前缀，实现逐字显示。
+export function tryParseStreamObject(buffer) {
+  const t = buffer.trim()
+  if (!t.startsWith('{')) return null
+  try {
+    const obj = JSON.parse(t)
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj
+  } catch (_) {}
+  const result = {}
+  const fb = t.match(/"feedback"\s*:\s*"((?:\\.|[^"\\])*)/)
+  if (fb && fb[1]) result.feedback = fb[1]
+  const sum = t.match(/"summary"\s*:\s*"((?:\\.|[^"\\])*)/)
+  if (sum && sum[1]) result.summary = sum[1]
+  const rec = t.match(/"hire_recommendation"\s*:\s*"((?:\\.|[^"\\])*)/)
+  if (rec && rec[1]) result.hire_recommendation = rec[1]
+  const sc = t.match(/"score"\s*:\s*(\d+(?:\.\d+)?)/)
+  if (sc) result.score = parseFloat(sc[1])
+  return Object.keys(result).length ? result : null
+}
+
 export function submitAnswer(interviewId, answer) {
   return api.post(`/interviews/${interviewId}/answer`, { answer })
 }
