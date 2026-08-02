@@ -6,7 +6,7 @@
 
 约束：
 - email 唯一索引
-- role: SAEnum(UserRole)，取值 ADMIN / SUPERADMIN
+- role: SAEnum(UserRole, values_callable) 持久化枚举值 admin / superadmin（与迁移/API 比较一致）
 """
 
 import enum
@@ -29,9 +29,14 @@ class Admin(BaseModel):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     role = Column(
-        SAEnum(UserRole, name="userrole", create_type=True),
+        SAEnum(
+            UserRole,
+            name="userrole",
+            create_type=True,
+            values_callable=lambda x: [e.value for e in x],
+        ),
         default=UserRole.ADMIN,
-        server_default="ADMIN",
+        server_default="admin",
         nullable=False,
     )
     email = Column(String(255), unique=True, index=True, nullable=False)
