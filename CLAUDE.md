@@ -42,6 +42,7 @@
 
 ```
 ai-interview-agent/
+├── start.sh                       # 一键启动（本地开发）：Docker + DB 幂等初始化 + 前端 dev 窗口 + --stop
 ├── ai-interview-backend/          # FastAPI 后端（容器化）
 │   ├── app/
 │   │   ├── api/                   # 接口模块（client/backoffice 拆 v1）
@@ -141,7 +142,11 @@ ai-interview-agent/
 > ⚠️ 容器名从 `ai-interview-*` 重命名为 `shilian-*`（2026-07-10 品牌升级）
 
 ```bash
-# === 本地开发（Windows + Docker Desktop）===
+# === 一键启动（本地开发，Git Bash 根目录一条命令）===
+./start.sh          # 后端容器 + DB 幂等初始化 + 两个前端 dev 窗口（详见 一键启动指南.md）
+./start.sh --stop   # 停止：杀前端窗口 + docker compose down
+
+# === 本地开发（Windows + Docker Desktop，手动分步）===
 cd ai-interview-backend
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
@@ -183,24 +188,15 @@ cd ai-interview-admin && npm install && npm run dev        # 本地 → 3001；�
 
 ## 当前状态
 
-**2026-08-01（最新）**：项目完整可运行（本地 7 容器 / 部署 4 容器 lite 栈，目标 2GB ECS）。`pytest -m "unit"` **89 passed**，前端 `npm run build` 通过，最终整体 code review **Ready to merge**。最新完成：出题 SSE 流式化（见下）；历史里程碑见文末。
+**2026-08-02（最新）**：项目完整可运行（本地 7 容器 / 部署 4 容器 lite 栈，目标 2GB ECS）。`pytest -m "unit"` **89 passed**，前端 `npm run build` 通过。最新完成：一键启动（本地开发）（见下）；历史里程碑见文末。
 
-### 出题 SSE 流式化（✅ 已完成；手动 E2E 待做）
+### 一键启动（本地开发）（✅ 已完成）
 
-`/interviews/start` 的 16s 等待里 ~14s 是单次 DeepSeek 选题 LLM（`chain.ainvoke` 一次性阻塞），前端 `ResumeUpload.vue:handleStart` 只显示假进度条动画。已改造为 `?stream=true` 全程 SSE（status → chunk token 逐字流出 → done），前端实时增量 JSON 解析让题目逐条浮现，消除假进度条等待。**总耗时不变，只改善感知**。设计：`docs/superpowers/specs/2026-08-01-question-streaming-sse-design.md`；计划：`docs/superpowers/plans/2026-08-01-question-streaming-sse.md`。
+项目根目录单条命令 `./start.sh`（Git Bash）拉起整套本地环境：Docker 检测 → dev 栈容器（`-f docker-compose.yml -f docker-compose.dev.yml up -d --build`）→ 120s 健康轮询 → **DB 幂等初始化**（alembic + admin + 3 seed，其中 question_bank/knowledge 用 psql count 守卫防重复）→ 两个前端 `cmd` 独立窗口跑 `npm run dev`；`./start.sh --stop` 停止。`一键启动指南.md` 已重构为一条命令主流程（手动步骤降级为故障排查用）。设计：`docs/superpowers/specs/2026-08-02-one-click-start-design.md`；计划：`docs/superpowers/plans/2026-08-02-one-click-start.md`。
 
-- **7 任务 + 收尾全部完成（subagent-driven，每任务 implementer + spec review + code quality review）**：
-  - Task 1 `try_parse_partial_array` 增量 JSON 数组解析（前端 tryParseQuestions 算法后端等价版）`b2c17e7`
-  - Task 2 `select_and_adapt_questions_stream` 流式选题（`chain.astream` 逐 token + 异常兜底回退候选前 N 题）`36c773c`
-  - Task 3 抽取 `_prepare_questions`（RAG 检索，流式/非流式共用，纯重构回归 82→82）`fe02730`
-  - Task 4 `start_interview_stream`（SSE async generator：status→chunk→done；失败路径 yield error 事件防 UI 卡死）`bdb4f4a`+`5f7eea6`
-  - Task 5 路由 `/interviews/start?stream=true`（StreamingResponse SSE 分支，非流式默认零回归）`78f0f7a`
-  - Task 6 前端 `startInterviewStream`+`tryParseQuestions`（SSE 消费 + 增量解析）`84aea93`
-  - Task 7 `ResumeUpload.vue` 流式化（题目逐条浮现 + 去重渲染 + 标题锁定）`602861d`
-  - 收尾 4 项：Task 2 遗留 slim 输入测试 `6c4235f` / 路由 body_iterator 转发断言 `5c0cc62` / `submitAnswerStream` 非 200 守卫 `4921318` / 假动画标题竞争修复 `41af3af`
-- **验证**：`pytest -m "unit"` **89 passed**（基线 73 + 新增 16）；前端 `npm run build` 通过；最终整体 code review **Ready to merge**。
-- 实现注记：`chain.astream(input={...})` 用关键字形式（LangChain `Runnable.astream` 首参即 input；计划原文位置参数会 TypeError）。
-- **手动 E2E 未做**（需真实 DeepSeek token + 已完成简历）：curl `?stream=true` 看 status→chunk→done；浏览器走前端流程看题目逐条浮现。
+- **验证**：干净环境（`down -v`）端到端通过（8006/3000/3001 可访问、种子落库 28/16/1）、二次运行幂等跳过、`--stop` 容器归零；最终整体 code review **Ready to merge**。
+- **顺带修复 3 个 bug**（干净环境暴露）：① `Admin.role` 枚举加 `values_callable` 持久化小写值（否则全新库建管理员 DataError）；② `create_first_admin.py` 密码同步为 `LY1234567890`；③ `start.sh` 前端窗口子 shell 后台化防非交互阻塞。
+- **待人工确认**：前端窗口内 npm 实际服务（无头环境无法闭环）；本机 Clash 代理下 curl localhost 需 `--noproxy '*'`。
 
 ### 待办（不阻塞）
 
@@ -208,9 +204,11 @@ cd ai-interview-admin && npm install && npm run dev        # 本地 → 3001；�
 2. **`startInterviewStream` 未接 AbortController**——中途离开页面 done 仍会跳转（流仅 ~16s，影响小）
 3. **前端 `startInterview` 导出已无引用**——保留作回退
 4. **部署/生产 DB 大概率缺 embedding 列**（全真链路验证暴露）——上线前必须执行 `alembic upgrade head` + `scripts/rebuild_embeddings.py`（question_bank 84/84 + knowledge_chunks 32/32）
+5. **两个手动 E2E 未做**：出题 SSE（`?stream=true` 需真实 token + 已完成简历）；一键启动前端窗口内 npm 服务（需交互终端跑 `./start.sh` 人工确认）
 
-### 里程碑（2026-08-01 及之前，详见 `docs/PROJECT_HISTORY.md`）
+### 里程碑（2026-08-02 及之前，详见 `docs/PROJECT_HISTORY.md`）
 
+- **出题 SSE 流式化**（2026-08-01）：`/interviews/start?stream=true` 全程 SSE（status→chunk→done）+ 前端增量 JSON 解析，题目逐条浮现消除假进度条等待（总耗时不变）；7 任务 + 收尾 commit 详见 PROJECT_HISTORY
 - **Phase 0-6 完成**：pgvector 迁移、LangGraph 面试 HITL、RAG 混合检索（vector+BM25→RRF→rerank，lifespan 自动构建 BM25 索引）、RAGAS 评估、双 Swagger、首次云端部署（`123.56.239.7`，域名 `shilian.asia` 待 ICP 备案）
 - **全真链路验证**（`docker exec -e RUN_FULL_CHAIN=1 shilian-app pytest tests/test_full_chain_integration.py -v`）：RAG 混合检索 + RetrievalCheck 自检 + PositionAgent 5 工具全链，4 测试通过。暴露并修复两个真实 bug：① **RAG 向量检索完全失效（生产级）**——DB 停留在 Milvus 期缺 embedding 列，向量检索静默降级 BM25-only；修复 `alembic upgrade head` + 新增 `rebuild_embeddings.py`；② **rerank 模型失效 + 崩溃**——`DASHSCOPE_RERANK_MODEL` 改 `gte-rerank-v2` + `app/retrieval/rerank.py` 加 status_code 检查。agent 全链偶发 API 不稳定（`Connection error`/幻觉）属 DeepSeek API 层，重试即过
 - **出题链路提速 4x**（63s→16s）：瘦身 `question_select` prompt + `select_and_adapt_questions` v2（LLM 只选题面 -83%，参考答案按 bank_id 补齐）+ 前端 `startInterview` 超时 60s→180s
