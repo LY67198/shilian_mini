@@ -104,8 +104,10 @@ ensure_node_modules() {
 
 start_frontends() {
   info "启动两个前端 dev 窗口..."
-  cmd //c start "shilian-frontend" cmd //k "cd /d $(cygpath -w "$FRONTEND_DIR") && npm run dev" || warn "前端窗口启动失败"
-  cmd //c start "shilian-admin" cmd //k "cd /d $(cygpath -w "$ADMIN_DIR") && npm run dev" || warn "管理端窗口启动失败"
+  # 后台启动：cmd /c start 在非交互/重定向输出环境下会阻塞（子进程继承管道句柄），
+  # 用子 shell 后台化保证脚本能继续到 print_urls，交互终端下 cmd /c start 本身即立即返回
+  (cmd //c start "shilian-frontend" cmd //k "cd /d $(cygpath -w "$FRONTEND_DIR") && npm run dev" || warn "前端窗口启动失败") &
+  (cmd //c start "shilian-admin" cmd //k "cd /d $(cygpath -w "$ADMIN_DIR") && npm run dev" || warn "管理端窗口启动失败") &
 }
 
 print_urls() {
