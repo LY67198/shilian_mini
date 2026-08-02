@@ -21,7 +21,7 @@ async def create_first_admin():
 
     # 管理员信息
     email = "admin@ai-interview.com"
-    password = "ai-interview&admin"
+    password = "LY1234567890"
     first_name = "AI-Interview"
     last_name = "Admin"
 
