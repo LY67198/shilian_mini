@@ -189,7 +189,7 @@ cd ai-interview-admin && npm install && npm run dev        # 本地 → 3001；�
 
 ## 当前状态
 
-**2026-08-02（最新）**：项目完整可运行（本地 7 容器 / 部署 4 容器 lite 栈，目标 2GB ECS）。`pytest -m "unit"` **89 passed**，前端 `npm run build` 通过。最新完成：一键启动（本地开发）（见下）；历史里程碑见文末。
+**2026-08-02（最新）**：项目完整可运行（本地 7 容器 / 部署 4 容器 lite 栈，目标 2GB ECS）。`pytest -m "unit"` **91 passed**，前端 `npm run build` 通过。最新完成：一键启动（本地开发）（见下）；历史里程碑见文末。
 - **面试反馈真流式化**（2026-08-02）：evaluate/generate_report 改 `astream + extract_json`（复用出题流式范式），SSE `chunk` 逐字流；前端 `Interview.vue` 改对象增量 JSON 解析，feedback/报告摘要逐字显示，移除 JSON 正则过滤。spec：`docs/superpowers/specs/2026-08-02-feedback-streaming-design.md`
 
 ### 一键启动（本地开发）（✅ 已完成）
