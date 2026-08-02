@@ -126,6 +126,7 @@ ai-interview-agent/
 - ❌ 禁止 `submit_answer(stream=False)` 和 `submit_answer_stream` 分两个方法 — 合并为 `submit_answer(stream: bool = False)`
 - ❌ 禁止 `isinstance(llm_output, AIMessage)` 后取 `.content` 再 `json.loads()` — 评分节点用 `with_structured_output`
 - ❌ 禁止 `_extract_json` 抛 `ValueError` — 已改为返回带 `parse_failed: True` 的 fallback dict
+- ❌ 禁止 `with_structured_output` + `ainvoke` 阻塞反馈流式 —— **流式链路**（evaluate / generate_report / 出题）用 `chain.astream() 累积 + extract_json` 最后解析（与出题链路一致），结构化结果仍由 Pydantic 校验保证；**非流式链路**仍强制 `with_structured_output`
 
 ## pgvector 向量库使用规则
 
@@ -189,6 +190,7 @@ cd ai-interview-admin && npm install && npm run dev        # 本地 → 3001；�
 ## 当前状态
 
 **2026-08-02（最新）**：项目完整可运行（本地 7 容器 / 部署 4 容器 lite 栈，目标 2GB ECS）。`pytest -m "unit"` **89 passed**，前端 `npm run build` 通过。最新完成：一键启动（本地开发）（见下）；历史里程碑见文末。
+- **面试反馈真流式化**（2026-08-02）：evaluate/generate_report 改 `astream + extract_json`（复用出题流式范式），SSE `chunk` 逐字流；前端 `Interview.vue` 改对象增量 JSON 解析，feedback/报告摘要逐字显示，移除 JSON 正则过滤。spec：`docs/superpowers/specs/2026-08-02-feedback-streaming-design.md`
 
 ### 一键启动（本地开发）（✅ 已完成）
 
