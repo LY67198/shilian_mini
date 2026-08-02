@@ -1,4 +1,4 @@
-"""generate_report node — 使用 prompt | llm.with_structured_output 生成报告"""
+"""generate_report node — prompt | llm.bind(json_object) astream 真流式生成报告并落库"""
 from __future__ import annotations
 
 import json
@@ -7,16 +7,17 @@ import logging
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.json_utils import extract_json
 from app.llm import get_chat_llm
 from app.llm.prompts import load_prompt
 from app.repositories.interview_repo import interview_repo
-from app.workflows.interview.state import InterviewState, ReportResult
+from app.workflows.interview.state import InterviewState
 
 logger = logging.getLogger(__name__)
 
 
 async def generate_report_node(state: InterviewState, config: RunnableConfig) -> dict:
-    """汇总所有评分，使用 prompt | llm.with_structured_output(ReportResult) 生成报告并写入 DB。
+    """汇总所有评分，使用 prompt | llm.bind(json_object) astream + extract_json 生成报告并写入 DB。
 
     Args:
         state: 当前 InterviewState，需含 interview_id / questions；可选 resume_context / target_position。
@@ -61,19 +62,26 @@ async def generate_report_node(state: InterviewState, config: RunnableConfig) ->
     try:
         prompt = load_prompt("report_agent")
         llm = get_chat_llm(temperature=0.5)
-        structured_llm = llm.with_structured_output(ReportResult, method="json_mode")
+        structured_llm = llm.bind(response_format={"type": "json_object"})
         chain = prompt | structured_llm
-        result: ReportResult = await chain.ainvoke({
+
+        chunks: list[str] = []
+        async for chunk in chain.astream({
             "resume_json": json.dumps(resume_context, ensure_ascii=False),
             "target_position": target_position,
             "qa_text": qa_text,
-        })
+        }):
+            text = chunk.content if hasattr(chunk, "content") else str(chunk)
+            if text:
+                chunks.append(text)
+
+        parsed = extract_json("".join(chunks))
         report = {
-            "summary": result.summary,
-            "strengths": result.strengths,
-            "weaknesses": result.weaknesses,
-            "suggestions": result.suggestions,
-            "hire_recommendation": result.hire_recommendation,
+            "summary": str(parsed.get("summary", "报告生成失败")),
+            "strengths": _as_str_list(parsed.get("strengths")),
+            "weaknesses": _as_str_list(parsed.get("weaknesses")),
+            "suggestions": _as_str_list(parsed.get("suggestions")),
+            "hire_recommendation": str(parsed.get("hire_recommendation", "")),
         }
     except Exception as e:
         logger.error(f"报告生成失败: {e}")
@@ -118,3 +126,10 @@ def _build_qa_text(qa_data: list[dict]) -> str:
             f"得分：{item.get('score', 'N/A')}\n\n"
         )
     return text
+
+
+def _as_str_list(value) -> list:
+    """把 LLM 返回的列表字段归一化为 list[str]；非列表/None 回空列表。"""
+    if isinstance(value, list):
+        return [str(v) for v in value if v is not None]
+    return []

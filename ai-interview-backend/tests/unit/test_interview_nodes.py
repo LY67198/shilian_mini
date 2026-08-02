@@ -438,9 +438,8 @@ class TestAskQuestion:
 class TestGenerateReport:
     async def test_uses_db_feedback_and_zero_fallback(self):
         from types import SimpleNamespace
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock, MagicMock, patch
         from app.workflows.interview.nodes.generate_report import generate_report_node
-        from app.workflows.interview.state import ReportResult
 
         scored_msgs = [
             SimpleNamespace(question_index=0, score=7.0, feedback="回答良好", content="答案A"),
@@ -450,11 +449,11 @@ class TestGenerateReport:
         mock_repo = AsyncMock()
         mock_repo.get_scored_messages.return_value = scored_msgs
 
-        chain = AsyncMock()
-        chain.ainvoke.return_value = ReportResult(
-            summary="s", strengths=["st"], weaknesses=["w"],
-            suggestions=["su"], hire_recommendation="h",
-        )
+        async def _agen(variables):
+            yield SimpleNamespace(content='{"summary": "整体表现良好", "strengths": ["思路清晰"], "weaknesses": ["深度不足"], "suggestions": ["加强源码阅读"], "hire_recommendation": "建议录用"}')
+
+        chain = MagicMock()
+        chain.astream = MagicMock(side_effect=_agen)
         mock_prompt = type("MockPrompt", (), {"__or__": lambda self, other: chain})()
 
         state = {
@@ -476,7 +475,7 @@ class TestGenerateReport:
         ), patch(
             "app.workflows.interview.nodes.generate_report.get_chat_llm"
         ) as mock_get_llm:
-            mock_get_llm.return_value.with_structured_output.return_value = object()
+            mock_get_llm.return_value.bind.return_value = MagicMock()
             result = await generate_report_node(
                 state, {"configurable": {"db": AsyncMock()}}
             )
@@ -486,3 +485,48 @@ class TestGenerateReport:
         assert qs[0]["feedback"] == "回答良好"   # P2-3: DB feedback 不再硬编码空
         assert qs[1]["score"] == 0.0              # P2-4: 未评分回退 0.0 而非 9.0
         assert qs[1]["feedback"] == ""
+
+    async def test_missing_list_fields_fallback_empty(self):
+        """报告 JSON 缺失列表字段时 _as_str_list 回退空列表，不抛异常"""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from app.workflows.interview.nodes.generate_report import generate_report_node
+
+        async def _agen(variables):
+            yield SimpleNamespace(content='{"summary": "只有摘要", "hire_recommendation": "通过"}')
+
+        chain = MagicMock()
+        chain.astream = MagicMock(side_effect=_agen)
+        mock_prompt = type("MockPrompt", (), {"__or__": lambda self, other: chain})()
+
+        mock_repo = AsyncMock()
+        mock_repo.get_scored_messages.return_value = [
+            SimpleNamespace(question_index=0, score=7.0, feedback="好", content="答案A"),
+        ]
+        state = {
+            "interview_id": 1,
+            "questions": [{"question": "Q0"}],
+            "resume_context": {},
+            "target_position": "Python",
+            "current_index": 0,
+            "answer": "答案A",
+        }
+
+        with patch(
+            "app.workflows.interview.nodes.generate_report.interview_repo",
+            mock_repo,
+        ), patch(
+            "app.workflows.interview.nodes.generate_report.load_prompt",
+            return_value=mock_prompt,
+        ), patch(
+            "app.workflows.interview.nodes.generate_report.get_chat_llm"
+        ) as mock_get_llm:
+            mock_get_llm.return_value.bind.return_value = MagicMock()
+            result = await generate_report_node(
+                state, {"configurable": {"db": AsyncMock()}}
+            )
+
+        assert result["report"]["summary"] == "只有摘要"
+        assert result["report"]["strengths"] == []
+        assert result["report"]["weaknesses"] == []
+        assert result["report"]["suggestions"] == []
