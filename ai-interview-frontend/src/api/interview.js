@@ -97,18 +97,39 @@ function tryParseQuestions(buffer) {
 export function tryParseStreamObject(buffer) {
   const t = buffer.trim()
   if (!t.startsWith('{')) return null
+
+  // 同一连接内 evaluate → generate_report 可能串流两个根对象（无分界事件），
+  // 用带引号感知的括号扫描定位最后一个根对象的起点，丢弃已闭合的旧对象。
+  let start = 0
+  let depth = 0
+  let inStr = false
+  let esc = false
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i]
+    if (inStr) {
+      if (esc) esc = false
+      else if (c === '\\') esc = true
+      else if (c === '"') inStr = false
+      continue
+    }
+    if (c === '"') inStr = true
+    else if (c === '{') { if (depth === 0) start = i; depth++ }
+    else if (c === '}') depth--
+  }
+  const root = start > 0 ? t.slice(start) : t
+
   try {
-    const obj = JSON.parse(t)
+    const obj = JSON.parse(root)
     if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj
   } catch (_) {}
   const result = {}
-  const fb = t.match(/"feedback"\s*:\s*"((?:\\.|[^"\\])*)/)
+  const fb = root.match(/"feedback"\s*:\s*"((?:\\.|[^"\\])*)/)
   if (fb && fb[1]) result.feedback = fb[1]
-  const sum = t.match(/"summary"\s*:\s*"((?:\\.|[^"\\])*)/)
+  const sum = root.match(/"summary"\s*:\s*"((?:\\.|[^"\\])*)/)
   if (sum && sum[1]) result.summary = sum[1]
-  const rec = t.match(/"hire_recommendation"\s*:\s*"((?:\\.|[^"\\])*)/)
+  const rec = root.match(/"hire_recommendation"\s*:\s*"((?:\\.|[^"\\])*)/)
   if (rec && rec[1]) result.hire_recommendation = rec[1]
-  const sc = t.match(/"score"\s*:\s*(\d+(?:\.\d+)?)/)
+  const sc = root.match(/"score"\s*:\s*(\d+(?:\.\d+)?)/)
   if (sc) result.score = parseFloat(sc[1])
   return Object.keys(result).length ? result : null
 }
