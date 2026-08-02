@@ -80,13 +80,13 @@ class TestInterviewState:
 
 @pytest.mark.unit
 class TestEvaluateNode:
-    """evaluate_node — 使用 prompt | llm.with_structured_output(ScoreResult) 评分，需 mock LLM"""
+    """evaluate_node — 使用 prompt | llm.bind(json_object) + astream + extract_json 评分，需 mock LLM"""
 
     async def test_returns_score_and_feedback(self):
-        """evaluate_node returns score + feedback from structured output"""
+        """evaluate_node returns score + feedback from streamed json output"""
         from unittest.mock import AsyncMock, MagicMock, patch
+        from types import SimpleNamespace
         from app.workflows.interview.nodes.evaluate import evaluate_node
-        from app.workflows.interview.state import ScoreResult
 
         state = {
             "current_question": "请介绍 Python 的 GIL",
@@ -98,8 +98,11 @@ class TestEvaluateNode:
             "user_id": 42,
         }
 
-        chain = AsyncMock()
-        chain.ainvoke.return_value = ScoreResult(score=7.5, feedback="回答良好")
+        async def _agen(variables):
+            yield SimpleNamespace(content='{"score": 7.5, "feedback": "回答良好", "follow_up": false}')
+
+        chain = MagicMock()
+        chain.astream = MagicMock(side_effect=_agen)
         mock_prompt = type("MockPrompt", (), {"__or__": lambda self, other: chain})()
 
         # Mock DB: return an unscored candidate message
@@ -116,7 +119,7 @@ class TestEvaluateNode:
         ), patch(
             "app.workflows.interview.nodes.evaluate.get_chat_llm"
         ) as mock_get_llm:
-            mock_get_llm.return_value.with_structured_output.return_value = object()
+            mock_get_llm.return_value.bind.return_value = MagicMock()
             result = await evaluate_node(state, {"configurable": {"db": mock_db}})
 
         assert result["score"] == 7.5
@@ -129,8 +132,8 @@ class TestEvaluateNode:
     async def test_persists_score_to_db_message(self):
         """evaluate_node updates the latest unscored candidate message with score+feedback+question_index"""
         from unittest.mock import AsyncMock, MagicMock, patch
+        from types import SimpleNamespace
         from app.workflows.interview.nodes.evaluate import evaluate_node
-        from app.workflows.interview.state import ScoreResult
 
         state = {
             "current_question": "What is dependency injection?",
@@ -142,8 +145,11 @@ class TestEvaluateNode:
             "current_index": 2,
         }
 
-        chain = AsyncMock()
-        chain.ainvoke.return_value = ScoreResult(score=9.0, feedback="Excellent")
+        async def _agen(variables):
+            yield SimpleNamespace(content='{"score": 9.0, "feedback": "Excellent", "follow_up": false}')
+
+        chain = MagicMock()
+        chain.astream = MagicMock(side_effect=_agen)
         mock_prompt = type("MockPrompt", (), {"__or__": lambda self, other: chain})()
 
         mock_msg = MagicMock()
@@ -159,7 +165,7 @@ class TestEvaluateNode:
         ), patch(
             "app.workflows.interview.nodes.evaluate.get_chat_llm"
         ) as mock_get_llm:
-            mock_get_llm.return_value.with_structured_output.return_value = object()
+            mock_get_llm.return_value.bind.return_value = MagicMock()
             await evaluate_node(state, {"configurable": {"db": mock_db}})
 
         assert mock_msg.score == 9.0
@@ -198,8 +204,8 @@ class TestEvaluateNode:
     async def test_commit_failure_marks_persist_failed(self):
         """提交失败时打 persist_failed 标记，面试不中断"""
         from unittest.mock import AsyncMock, MagicMock, patch
+        from types import SimpleNamespace
         from app.workflows.interview.nodes.evaluate import evaluate_node
-        from app.workflows.interview.state import ScoreResult
 
         state = {
             "current_question": "Q",
@@ -211,8 +217,11 @@ class TestEvaluateNode:
             "current_index": 0,
         }
 
-        chain = AsyncMock()
-        chain.ainvoke.return_value = ScoreResult(score=6.0, feedback="ok")
+        async def _agen(variables):
+            yield SimpleNamespace(content='{"score": 6.0, "feedback": "ok", "follow_up": false}')
+
+        chain = MagicMock()
+        chain.astream = MagicMock(side_effect=_agen)
         mock_prompt = type("MockPrompt", (), {"__or__": lambda self, other: chain})()
 
         mock_msg = MagicMock()
@@ -229,7 +238,7 @@ class TestEvaluateNode:
         ), patch(
             "app.workflows.interview.nodes.evaluate.get_chat_llm"
         ) as mock_get_llm:
-            mock_get_llm.return_value.with_structured_output.return_value = object()
+            mock_get_llm.return_value.bind.return_value = MagicMock()
             result = await evaluate_node(state, {"configurable": {"db": mock_db}})
 
         assert result["score"] == 6.0
@@ -238,8 +247,8 @@ class TestEvaluateNode:
     async def test_history_excludes_current_answer(self):
         """history_text 排除与 {answer} 重复的当前答案消息"""
         from unittest.mock import AsyncMock, MagicMock, patch
+        from types import SimpleNamespace
         from app.workflows.interview.nodes.evaluate import evaluate_node
-        from app.workflows.interview.state import ScoreResult
 
         state = {
             "current_question": "Q2",
@@ -256,10 +265,18 @@ class TestEvaluateNode:
             "current_index": 1,
         }
 
-        chain = AsyncMock()
-        chain.ainvoke.return_value = ScoreResult(score=8.0, feedback="ok")
+        async def _agen(variables):
+            yield SimpleNamespace(content='{"score": 8.0, "feedback": "ok", "follow_up": false}')
+
+        chain = MagicMock()
+        chain.astream = MagicMock(side_effect=_agen)
         mock_prompt = type("MockPrompt", (), {"__or__": lambda self, other: chain})()
+        mock_msg = MagicMock()
+        mock_msg.score = None
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_msg
         mock_db = AsyncMock()
+        mock_db.execute.return_value = mock_result
 
         with patch(
             "app.workflows.interview.nodes.evaluate.load_prompt",
@@ -267,13 +284,53 @@ class TestEvaluateNode:
         ), patch(
             "app.workflows.interview.nodes.evaluate.get_chat_llm"
         ) as mock_get_llm:
-            mock_get_llm.return_value.with_structured_output.return_value = object()
+            mock_get_llm.return_value.bind.return_value = MagicMock()
             await evaluate_node(state, {"configurable": {"db": mock_db}})
 
-        variables = chain.ainvoke.call_args[0][0]
+        variables = chain.astream.call_args[0][0]
         assert "当前答案" not in variables["history_text"]
         assert "旧回答" in variables["history_text"]
         assert variables["answer"] == "当前答案"
+
+    async def test_non_json_output_falls_back_to_default_score(self):
+        """astream 输出非 JSON 时 extract_json 兜底默认分，不抛异常"""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from types import SimpleNamespace
+        from app.workflows.interview.nodes.evaluate import evaluate_node
+
+        state = {
+            "current_question": "Q",
+            "answer": "A",
+            "resume_context": {},
+            "chat_history": [],
+            "knowledge_context": [],
+            "interview_id": 1,
+        }
+
+        async def _agen(variables):
+            yield SimpleNamespace(content="这是纯文本，没有 JSON")
+
+        chain = MagicMock()
+        chain.astream = MagicMock(side_effect=_agen)
+        mock_prompt = type("MockPrompt", (), {"__or__": lambda self, other: chain})()
+        mock_msg = MagicMock()
+        mock_msg.score = None
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_msg
+        mock_db = AsyncMock()
+        mock_db.execute.return_value = mock_result
+
+        with patch(
+            "app.workflows.interview.nodes.evaluate.load_prompt",
+            return_value=mock_prompt,
+        ), patch(
+            "app.workflows.interview.nodes.evaluate.get_chat_llm"
+        ) as mock_get_llm:
+            mock_get_llm.return_value.bind.return_value = MagicMock()
+            result = await evaluate_node(state, {"configurable": {"db": mock_db}})
+
+        assert result["score"] == 5.0
+        assert result["feedback"]  # extract_json 兜底会把原文作为 feedback 返回
 
 
 @pytest.mark.unit

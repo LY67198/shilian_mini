@@ -1,4 +1,4 @@
-"""evaluate node — use prompt | llm.with_structured_output to score and persist to DB"""
+"""evaluate node — prompt | llm.bind(json_object) astream 真流式评分并落库"""
 from __future__ import annotations
 
 import json
@@ -8,6 +8,7 @@ from langchain_core.runnables import RunnableConfig
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.json_utils import extract_json
 from app.llm import get_chat_llm
 from app.llm.prompts import load_prompt
 from app.models.interview_message import InterviewMessage
@@ -19,7 +20,8 @@ logger = logging.getLogger(__name__)
 async def evaluate_node(state: InterviewState, config: RunnableConfig) -> dict:
     """Evaluate candidate answer and persist score to InterviewMessage.
 
-    Uses prompt | llm.with_structured_output(ScoreResult) for structured scoring.
+    Uses prompt | llm.bind(response_format={"type": "json_object"}) + astream + extract_json
+    for structured scoring.
     After evaluation, writes score/feedback/question_index back to the latest
     unscored candidate message so generate_report_node can find them via
     get_scored_messages().
@@ -83,9 +85,21 @@ async def evaluate_node(state: InterviewState, config: RunnableConfig) -> dict:
     try:
         prompt = load_prompt("evaluator_agent")
         llm = get_chat_llm(temperature=0.3)
-        structured_llm = llm.with_structured_output(ScoreResult, method="json_mode")
+        structured_llm = llm.bind(response_format={"type": "json_object"})
         chain = prompt | structured_llm
-        result: ScoreResult = await chain.ainvoke(variables)
+
+        chunks: list[str] = []
+        async for chunk in chain.astream(variables):
+            text = chunk.content if hasattr(chunk, "content") else str(chunk)
+            if text:
+                chunks.append(text)
+
+        parsed = extract_json("".join(chunks))
+        result = ScoreResult(
+            score=float(parsed.get("score", 5.0)),
+            feedback=str(parsed.get("feedback", "")),
+            follow_up=bool(parsed.get("follow_up", False)),
+        )
     except Exception as e:
         logger.error(f"Structured scoring failed, returning fallback: {e}")
         return {"score": 5.0, "feedback": f"评分异常，已记录: {str(e)[:100]}"}
