@@ -122,9 +122,9 @@ ai-interview-agent/
 **Phase 2 重构硬性规则**：
 - ❌ 禁止新增 `@staticmethod` — 新 service 用实例方法 + FastAPI Depends 注入
 - ❌ 禁止手写 `yield f"data: {json.dumps(...)}\n\n"` — SSE 用 `app/workflows/_shared/sse.py:astream_to_sse()` 封装
-- ❌ 禁止 `re.search(r'\{.*"score".*\}', text)` 从 LLM 输出抠 JSON — 用 `with_structured_output(PydanticModel)` 拿强类型结果
+- ❌ 禁止 `re.search(r'\{.*"score".*\}', text)` 从 LLM 输出抠 JSON — 非流式链路用 `with_structured_output(PydanticModel)` 拿强类型结果；流式链路（见下）用 `chain.astream() 累积 + extract_json`
 - ❌ 禁止 `submit_answer(stream=False)` 和 `submit_answer_stream` 分两个方法 — 合并为 `submit_answer(stream: bool = False)`
-- ❌ 禁止 `isinstance(llm_output, AIMessage)` 后取 `.content` 再 `json.loads()` — 评分节点用 `with_structured_output`
+- ❌ 禁止 `isinstance(llm_output, AIMessage)` 后取 `.content` 再 `json.loads()` — 评分节点非流式链路用 `with_structured_output`，流式链路用 `chain.astream() 累积 + extract_json`（见下）
 - ❌ 禁止 `_extract_json` 抛 `ValueError` — 已改为返回带 `parse_failed: True` 的 fallback dict
 - ❌ 禁止 `with_structured_output` + `ainvoke` 阻塞反馈流式 —— **流式链路**（evaluate / generate_report / 出题）用 `chain.astream() 累积 + extract_json` 最后解析（与出题链路一致），结构化结果仍由 Pydantic 校验保证；**非流式链路**仍强制 `with_structured_output`
 
