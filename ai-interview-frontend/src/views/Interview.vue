@@ -60,6 +60,25 @@
         </div>
       </div>
 
+      <!-- 流式题目输出（逐字显示现场生成的题） -->
+      <div v-if="streamingQuestion" class="message interviewer">
+        <div class="avatar-col">
+          <svg viewBox="0 0 40 40" width="36" height="36" class="ai-avatar thinking">
+            <circle cx="20" cy="20" r="19" fill="white" stroke="#4f46e5" stroke-width="1.5"/>
+            <ellipse cx="14" cy="17" rx="2.5" ry="3" fill="#1e1e1e">
+              <animate attributeName="ry" values="3;1;3" dur="1.5s" repeatCount="indefinite"/>
+            </ellipse>
+            <ellipse cx="26" cy="17" rx="2.5" ry="3" fill="#1e1e1e">
+              <animate attributeName="ry" values="3;1;3" dur="1.5s" repeatCount="indefinite"/>
+            </ellipse>
+          </svg>
+        </div>
+        <div class="bubble">
+          <div class="bubble-content streaming-content" v-html="renderContent(streamingQuestion)"></div>
+          <span class="cursor-blink">▊</span>
+        </div>
+      </div>
+
       <!-- 流式输出 -->
       <div v-if="streamingText" class="message interviewer">
         <div class="avatar-col">
@@ -120,7 +139,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import { submitAnswerStream, getMessages, tryParseStreamObject } from '../api/interview'
+import { submitAnswerStream, getMessages, generateNextQuestion, tryParseStreamObject } from '../api/interview'
 
 const route = useRoute()
 const authStore = useAuthStore()
@@ -134,6 +153,7 @@ const currentIndex = ref(0)
 const totalQuestions = ref(5)
 const chatArea = ref(null)
 const streamingText = ref('')
+const streamingQuestion = ref('')
 
 // AbortController：离开组件时取消未完成的 SSE 请求，防止回调修改已卸载组件状态
 let abortController = null
@@ -184,10 +204,12 @@ onMounted(async () => {
     const data = await getMessages(interviewId)
     const msgList = Array.isArray(data) ? data : (data.items || data)
     messages.value = msgList.map(m => ({
-      role: m.role, content: m.content, score: m.score, feedback: m.feedback
+      role: m.role, content: m.content, score: m.score, feedback: m.feedback,
+      question_index: m.question_index
     }))
     const indices = msgList.map(m => m.question_index).filter(i => i != null)
     if (indices.length) currentIndex.value = Math.max(...indices)
+    await loadFirstQuestionIfMissing()
   } catch (e) {
     console.error('加载消息失败:', e)
   }
@@ -199,6 +221,40 @@ onMounted(async () => {
   setTimeout(() => { preparing.value = false }, 600)
   nextTick(scrollToBottom)
 })
+
+// 岗位匹配入口快建：Interview 无任何题目消息 → 挂载时现场生成第 1 题并逐字显示
+async function loadFirstQuestionIfMissing() {
+  const hasQuestion = messages.value.some(m => m.role === 'interviewer' && m.question_index != null)
+  if (hasQuestion) return
+
+  streamingQuestion.value = ''
+  if (abortController) abortController.abort()
+  abortController = new AbortController()
+  const controller = abortController
+  try {
+    await generateNextQuestion(interviewId,
+      () => {},  // status：无 UI 需求，忽略
+      (text) => {
+        streamingQuestion.value = text
+        scrollToBottom()
+      },
+      (data) => {
+        if (data.question) {
+          currentIndex.value = data.index ?? currentIndex.value
+          messages.value.push({ role: 'interviewer', content: data.question, question_index: data.index })
+        }
+        streamingQuestion.value = ''
+        scrollToBottom()
+      },
+      controller.signal
+    )
+  } catch (e) {
+    if (e.name === 'AbortError') return
+    streamingQuestion.value = ''
+    messages.value.push({ role: 'interviewer', content: '⚠️ 出错了：' + e.message })
+    scrollToBottom()
+  }
+}
 
 async function handleSubmit() {
   if (!answer.value.trim() || thinking.value) return
@@ -246,6 +302,10 @@ async function handleSubmit() {
           currentIndex.value = data.question_index
           messages.value.push({ role: 'interviewer', content: data.next_question })
         }
+        scrollToBottom()
+      },
+      (text) => {   // onQuestionChunk：下一题逐字显示
+        streamingQuestion.value = text
         scrollToBottom()
       },
       abortController.signal
