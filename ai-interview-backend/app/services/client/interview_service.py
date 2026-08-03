@@ -221,11 +221,14 @@ class InterviewService:
         resume_id: int,
         target_position: str,
         difficulty: str,
-        total_questions: int
+        total_questions: int,
+        generate_questions: bool = True,
     ) -> Dict:
         """开始新的面试会话。
 
-        校验简历归属与解析状态，调用 RAG 出题流程并落库 Interview + 首条 InterviewMessage。
+        校验简历归属与解析状态；generate_questions=True 时调用 RAG 出题流程并落库
+        Interview + 首条 InterviewMessage（上传页/API 非流式路径）；False 时只建
+        空题 Interview 记录（岗位匹配入口快建，首题由 next-question 端点生成）。
 
         Args:
             db: 数据库会话。
@@ -234,9 +237,11 @@ class InterviewService:
             target_position: 目标岗位。
             difficulty: 难度等级。
             total_questions: 计划面试题数。
+            generate_questions: 是否立即 RAG 出题并写首条消息。默认 True（保持原有行为）。
 
         Returns:
             包含 interview_id / first_question / question_index / total_questions 的字典。
+            快建模式（generate_questions=False）下 first_question 为 None。
 
         Raises:
             NotFoundError: 简历不存在。
@@ -261,19 +266,21 @@ class InterviewService:
             logger.error(f"简历 parsed_content 不是有效 JSON: resume_id={resume.id}")
             raise ValidationError(message="简历数据异常，请重新上传")
 
-        # ── RAG 出题流程：题库召回优先 + AI 兜底 ──────────────────────
-        questions = await self._generate_questions_with_rag(
-            db=db,
-            parsed_resume=parsed_resume,
-            target_position=target_position,
-            difficulty=difficulty,
-            total_questions=total_questions,
-        )
+        # ── 出题：快建模式不产出题（由 next-question 逐题生成）──────────
+        questions: list = []
+        if generate_questions:
+            questions = await self._generate_questions_with_rag(
+                db=db,
+                parsed_resume=parsed_resume,
+                target_position=target_position,
+                difficulty=difficulty,
+                total_questions=total_questions,
+            )
 
-        # 题库选中题目，累加 use_count
-        bank_ids = [q.get("bank_id") for q in questions if q.get("bank_id")]
-        if bank_ids:
-            await question_bank_service.increment_use_count(db, bank_ids)
+            # 题库选中题目，累加 use_count
+            bank_ids = [q.get("bank_id") for q in questions if q.get("bank_id")]
+            if bank_ids:
+                await question_bank_service.increment_use_count(db, bank_ids)
 
         # 创建面试记录
         interview = Interview(
@@ -290,16 +297,18 @@ class InterviewService:
         await db.commit()
         await db.refresh(interview)
 
-        # 保存第一道题作为面试官消息
-        first_question = questions[0]["question"]
-        msg = InterviewMessage(
-            interview_id=interview.id,
-            role="interviewer",
-            content=first_question,
-            question_index=0
-        )
-        db.add(msg)
-        await db.commit()
+        # 保存第一道题作为面试官消息（快建模式不写首条消息）
+        first_question = None
+        if questions:
+            first_question = questions[0]["question"]
+            msg = InterviewMessage(
+                interview_id=interview.id,
+                role="interviewer",
+                content=first_question,
+                question_index=0
+            )
+            db.add(msg)
+            await db.commit()
 
         return {
             "interview_id": interview.id,

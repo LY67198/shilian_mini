@@ -166,3 +166,70 @@ class TestStartInterviewStream:
 
         assert [e for e, _ in parsed] == ["error"]
         assert "简历不存在" in parsed[0][1]["message"]
+
+
+@pytest.mark.unit
+class TestStartInterviewFastCreate:
+    """start_interview(generate_questions=False) — 快建：不产出题、不写首条消息"""
+
+    @staticmethod
+    def _make_db_mock():
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        resume = SimpleNamespace(status="completed", parsed_content='{"skills": ["Python"]}')
+
+        class _Scalar:
+            def scalar_one_or_none(self):
+                return resume
+
+        db = AsyncMock()
+        db.execute.return_value = _Scalar()
+        db.add = lambda obj: None
+
+        async def fake_refresh(obj):
+            obj.id = 99
+
+        db.refresh = fake_refresh
+        return db
+
+    async def test_fast_create_skips_generation_and_message(self, monkeypatch):
+        gen_mock = AsyncMock()
+        monkeypatch.setattr(mod.InterviewService, "_generate_questions_with_rag", gen_mock)
+
+        svc = mod.InterviewService()
+        result = await svc.start_interview(
+            db=self._make_db_mock(),
+            user_id=1,
+            resume_id=1,
+            target_position="Python 后端",
+            difficulty="medium",
+            total_questions=3,
+            generate_questions=False,
+        )
+
+        gen_mock.assert_not_awaited()
+        assert result["interview_id"] == 99
+        assert result["first_question"] is None
+        assert result["question_index"] == 0
+        assert result["total_questions"] == 3
+
+    async def test_generate_by_default_runs_rag_and_writes_first_message(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        gen_mock = AsyncMock(return_value=[{"question": "Q0", "bank_id": 1}])
+        monkeypatch.setattr(mod.InterviewService, "_generate_questions_with_rag", gen_mock)
+        monkeypatch.setattr(mod.question_bank_service, "increment_use_count", AsyncMock())
+
+        svc = mod.InterviewService()
+        result = await svc.start_interview(
+            db=self._make_db_mock(),
+            user_id=1,
+            resume_id=1,
+            target_position="Python 后端",
+            difficulty="medium",
+            total_questions=3,
+        )
+
+        gen_mock.assert_awaited_once()
+        assert result["first_question"] == "Q0"
