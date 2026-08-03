@@ -91,6 +91,90 @@ function tryParseQuestions(buffer) {
   }
 }
 
+// 从累积的题目 JSON 原文提取最后一个 "question": "..." 的文本前缀（逐字增长）。
+// 兼容 select_one（含 category/bank_id）与 generate_one（含 reference_answer）两种单对象输出。
+export function extractQuestionText(buffer) {
+  const t = (buffer || '').trim()
+  if (!t) return ''
+  const re = /"question"\s*:\s*"((?:\\.|[^"\\])*)/g
+  let m
+  let last = ''
+  while ((m = re.exec(t)) !== null) {
+    last = m[1]
+    if (m.index === re.lastIndex) re.lastIndex++  // 防空匹配死循环
+  }
+  return last
+}
+
+export async function generateNextQuestion(interviewId, onStatus, onQuestionChunk, onDone, signal) {
+  const authStore = (await import('../stores/auth')).useAuthStore()
+  const response = await fetch(`/api/v1/interviews/${interviewId}/next-question?stream=true`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${authStore.token}`
+    },
+    body: '{}',
+    signal
+  })
+
+  // 非 200（401/5xx 等非 SSE body）→ 抛错由调用方 catch 统一兜底
+  if (!response.ok) {
+    const detail = await response.text()
+    throw new Error(`生成题目失败 (HTTP ${response.status})${detail ? ': ' + detail : ''}`)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let lineBuffer = ''      // SSE 行拆分缓冲
+  let jsonBuffer = ''      // 题目 JSON 原文累积缓冲
+  let currentEvent = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      lineBuffer += decoder.decode(value, { stream: true })
+
+      const lines = lineBuffer.split('\n')
+      lineBuffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (line === '') {
+          currentEvent = ''
+          continue
+        }
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6))
+            switch (currentEvent) {
+              case 'status':
+                onStatus(data.message)
+                break
+              case 'question_chunk':
+                jsonBuffer += data.content
+                const qText = extractQuestionText(jsonBuffer)
+                if (qText) onQuestionChunk(qText)
+                break
+              case 'error':
+                throw new Error(data.message || data.error || 'Unknown error')
+              case 'done':
+                onDone(data)
+                break
+            }
+          } catch (e) {
+            if (e.message !== 'Unexpected end of JSON input') throw e
+          }
+        }
+      }
+    }
+  } finally {
+    try { reader.releaseLock() } catch (_) {}
+  }
+}
+
 // 对象型增量 JSON 解析：能解出多少字段就返回多少（SSE 流式反馈/报告用）。
 // 与 tryParseQuestions（数组，补右括号）互补：这里是对象，用字段正则提取
 // 已闭合/正在闭合的字符串字段前缀，实现逐字显示。
@@ -138,7 +222,7 @@ export function submitAnswer(interviewId, answer) {
   return api.post(`/interviews/${interviewId}/answer`, { answer })
 }
 
-export async function submitAnswerStream(interviewId, answer, onChunk, onDone, signal) {
+export async function submitAnswerStream(interviewId, answer, onChunk, onDone, onQuestionChunk, signal) {
   const authStore = (await import('../stores/auth')).useAuthStore()
   const response = await fetch(`/api/v1/interviews/${interviewId}/answer?stream=true`, {
     method: 'POST',
@@ -159,7 +243,8 @@ export async function submitAnswerStream(interviewId, answer, onChunk, onDone, s
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
-  let buffer = ''
+  let buffer = ''              // feedback/report JSON 原文累积缓冲（现有）
+  let questionBuffer = ''      // 题目 JSON 原文累积缓冲（新增）
 
   let currentEvent = ''
   let scoreData = null
@@ -188,6 +273,11 @@ export async function submitAnswerStream(interviewId, answer, onChunk, onDone, s
             switch (currentEvent) {
               case 'chunk':
                 onChunk(data.content)
+                break
+              case 'question_chunk':
+                questionBuffer += data.content
+                const qText = extractQuestionText(questionBuffer)
+                if (qText && onQuestionChunk) onQuestionChunk(qText)
                 break
               case 'score':
                 scoreData = data
