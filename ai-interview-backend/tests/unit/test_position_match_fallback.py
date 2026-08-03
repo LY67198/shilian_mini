@@ -119,6 +119,29 @@ class TestMatchPositionsFallback:
         assert out["recommended_positions"][0]["position_tag"] == tag
         create_mock.assert_not_called()
 
+    async def test_reuse_existing_tag_when_create_hits_concurrent_duplicate(self, monkeypatch):
+        from app.services.client import position_agent_tools as tools
+        title = "市场营销专员"
+        tag = "custom_" + hashlib.sha1(title.encode("utf-8")).hexdigest()[:8]
+        create_mock = self._patch(monkeypatch, existing_by_tag={})
+        # 模拟并发竞态：get_by_tag 返回 None，但 create 撞 ValueError（行此刻已由并发请求落库）
+        create_mock.side_effect = ValueError("position_tag 已存在")
+        monkeypatch.setattr(
+            tools.ai_service, "synthesize_positions",
+            AsyncMock(return_value=[{"title": title, "confidence": 0.7}]),
+        )
+
+        profile = {"primary_stack": ["市场"], "secondary_stack": [], "project_directions": []}
+        out = await tools.match_positions.ainvoke({"candidate_profile": profile})
+
+        # 复用已有 tag 而非跳过：岗位仍返回、match_source 为 custom
+        assert out["match_source"] == "custom"
+        pos = out["recommended_positions"][0]
+        assert pos["position_tag"] == tag
+        assert pos["position_tag"].startswith("custom_")
+        assert pos["title"] == title
+        create_mock.assert_awaited_once()
+
     async def test_synthesize_failure_falls_back_to_top_template(self, monkeypatch):
         from app.services.client import position_agent_tools as tools
         self._patch(monkeypatch, existing_by_tag={})

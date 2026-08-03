@@ -286,8 +286,7 @@ async def _synthesize_and_persist(candidate_profile: dict) -> list:
                             "is_active": True,
                         })
                     except ValueError:
-                        logger.warning(f"[match_positions] custom 模板 {tag} 已存在，跳过创建")
-                        continue
+                        logger.warning(f"[match_positions] custom 模板 {tag} 并发竞态已创建，复用已有 tag")
                     except Exception as e:
                         logger.warning(f"[match_positions] custom 模板 {tag} 落库失败，跳过: {e}")
                         continue
