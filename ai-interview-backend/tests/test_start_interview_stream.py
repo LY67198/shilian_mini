@@ -263,33 +263,7 @@ class TestStartInterviewFastCreate:
 class TestGenerateNextQuestionStreamSse:
     """interview_service.generate_next_question_stream — status → question_chunk* → done"""
 
-    @staticmethod
-    def _make_context(**overrides):
-        from types import SimpleNamespace
-
-        interview = SimpleNamespace(
-            resume_id=1,
-            target_position="Python 后端",
-            difficulty="medium",
-            total_questions=3,
-            current_question_index=0,
-            questions_data=[],
-            status="in_progress",
-        )
-        resume = SimpleNamespace(parsed_content='{"skills": ["Python"]}')
-
-        db = AsyncMock()
-        db.get = AsyncMock(return_value=resume)
-
-        repo = AsyncMock()
-        repo.get_by_id_for_user.return_value = interview
-        repo.list_messages.return_value = []
-        repo.create_message.return_value = None
-        return db, repo, interview
-
     async def test_streams_question_chunk_then_done(self, monkeypatch):
-        from types import SimpleNamespace
-
         candidates = [
             {
                 "id": 1, "question": "讲下 Python 的 GIL",
@@ -309,18 +283,25 @@ class TestGenerateNextQuestionStreamSse:
                 "reference_answer": "GIL 是全局解释器锁...", "source": "from_bank",
             })
 
-        from app.repositories.interview_repo import interview_repo as repo_orig
         from app.services.client.ai_service import ai_service
 
-        monkeypatch.setattr(mod.InterviewService, "_prepare_questions", fake_prepare)
-        monkeypatch.setattr(ai_service, "generate_next_question_stream", fake_gen)
-        monkeypatch.setattr(mod, "interview_repo", repo_orig)
-        monkeypatch.setattr(repo_orig, "get_by_id_for_user", AsyncMock(return_value=SimpleNamespace(
+        # 持有 get_by_id_for_user 返回的 interview 引用，流消费后断言其落库副作用
+        interview = SimpleNamespace(
             resume_id=1, target_position="Python 后端", difficulty="medium",
             total_questions=3, current_question_index=0, questions_data=[],
             status="in_progress",
-        )))
-        monkeypatch.setattr(repo_orig, "list_messages", AsyncMock(return_value=[]))
+        )
+        repo = AsyncMock()
+        repo.get_by_id_for_user.return_value = interview
+        repo.list_messages.return_value = []
+        create_msg_mock = AsyncMock()
+        repo.create_message = create_msg_mock
+        inc_mock = AsyncMock()
+
+        monkeypatch.setattr(mod.InterviewService, "_prepare_questions", fake_prepare)
+        monkeypatch.setattr(ai_service, "generate_next_question_stream", fake_gen)
+        monkeypatch.setattr(mod, "interview_repo", repo)
+        monkeypatch.setattr(mod.question_bank_service, "increment_use_count", inc_mock)
 
         svc = mod.InterviewService()
         db = AsyncMock()
@@ -336,6 +317,13 @@ class TestGenerateNextQuestionStreamSse:
         assert parsed[1][1]["content"].startswith('{"index": 0')
         assert parsed[2][1]["index"] == 0
         assert parsed[2][1]["question"] == "讲下 Python 的 GIL（微调）"
+
+        # 核心副作用：题目落库到 interview + 写首条消息 + commit + 题库 use_count
+        assert interview.questions_data[-1]["question"] == "讲下 Python 的 GIL（微调）"
+        assert interview.current_question_index == 0
+        create_msg_mock.assert_awaited_once()
+        db.commit.assert_awaited_once()
+        inc_mock.assert_awaited_once_with(db, [1])
 
     async def test_idempotent_returns_existing_question(self, monkeypatch):
         from types import SimpleNamespace
@@ -372,3 +360,57 @@ class TestGenerateNextQuestionStreamSse:
 
         assert [e for e, _ in parsed] == ["error"]
         assert "面试记录不存在" in parsed[0][1]["message"]
+
+    async def test_generation_exhausted_yields_error(self, monkeypatch):
+        """待生成索引 ≥ total_questions（current_question_index=3, total=3）→ 已生成完毕错误。"""
+        interview = SimpleNamespace(
+            resume_id=1, target_position="Python 后端", difficulty="medium",
+            total_questions=3, current_question_index=3,
+            questions_data=[], status="in_progress",
+        )
+        repo = AsyncMock()
+        repo.get_by_id_for_user.return_value = interview
+        monkeypatch.setattr(mod, "interview_repo", repo)
+
+        svc = mod.InterviewService()
+        sse_events = [s async for s in svc.generate_next_question_stream(
+            db=AsyncMock(), user_id=1, interview_id=1,
+        )]
+        parsed = _parse_sse_blocks(sse_events)
+
+        assert [e for e, _ in parsed] == ["error"]
+        assert "面试题目已生成完毕" in parsed[0][1]["message"]
+
+    async def test_empty_question_yields_error(self, monkeypatch):
+        """LLM 生成空题 → 不落库，status 后 error（message 含 题目生成失败，请重试）。"""
+        async def fake_prepare(self, **kwargs):
+            return []
+
+        async def fake_gen(**kwargs):
+            yield ("result", {"question": "", "index": 0, "bank_id": None})
+
+        from app.services.client.ai_service import ai_service
+
+        interview = SimpleNamespace(
+            resume_id=1, target_position="Python 后端", difficulty="medium",
+            total_questions=3, current_question_index=0,
+            questions_data=[], status="in_progress",
+        )
+        repo = AsyncMock()
+        repo.get_by_id_for_user.return_value = interview
+        repo.list_messages.return_value = []
+
+        monkeypatch.setattr(mod.InterviewService, "_prepare_questions", fake_prepare)
+        monkeypatch.setattr(ai_service, "generate_next_question_stream", fake_gen)
+        monkeypatch.setattr(mod, "interview_repo", repo)
+
+        svc = mod.InterviewService()
+        db = AsyncMock()
+        db.get = AsyncMock(return_value=SimpleNamespace(parsed_content='{"skills": ["Python"]}'))
+        sse_events = [s async for s in svc.generate_next_question_stream(
+            db=db, user_id=1, interview_id=1,
+        )]
+        parsed = _parse_sse_blocks(sse_events)
+
+        assert [e for e, _ in parsed] == ["status", "error"]
+        assert "题目生成失败，请重试" in parsed[1][1]["message"]
