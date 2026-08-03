@@ -402,15 +402,24 @@ class TestRetrieveKnowledgeNode:
 
 @pytest.mark.unit
 class TestAskQuestion:
-    """ask_question_node — 越界必须在写 DB 之前触发"""
+    """ask_question_node 双模：预生成取题 / 渐进现场生成，越界在写 DB 前触发"""
 
     async def test_oob_raises_before_db_write(self):
+        """next_index 达 total_questions → 渐进模式也不应超过目标题数，写 DB 前抛 RuntimeError"""
         from unittest.mock import AsyncMock, patch
+        from types import SimpleNamespace
         from app.workflows.interview.nodes.ask_question import ask_question_node
 
         mock_db = AsyncMock()
         mock_repo = AsyncMock()
-        state = {"interview_id": 1, "current_index": 4, "questions": [{}] * 5}
+        # next_index=5 已达 total_questions=5 → 越界
+        interview = SimpleNamespace(
+            resume_id=1, target_position="Python", difficulty="medium",
+            total_questions=5,
+            questions_data=[{"question": f"Q{i}"} for i in range(5)],
+        )
+        mock_repo.get_by_id_for_user = AsyncMock(return_value=interview)
+        state = {"interview_id": 1, "user_id": 1, "current_index": 4, "questions": [{}] * 5}
 
         with patch(
             "app.workflows.interview.nodes.ask_question.interview_repo",
@@ -423,13 +432,22 @@ class TestAskQuestion:
         mock_repo.create_message.assert_not_called()
 
     async def test_advances_index_in_bounds(self):
+        """预生成模式：questions_data 充足时按索引取下一题并落库"""
         from unittest.mock import AsyncMock, patch
+        from types import SimpleNamespace
         from app.workflows.interview.nodes.ask_question import ask_question_node
 
         mock_db = AsyncMock()
         mock_repo = AsyncMock()
+        interview = SimpleNamespace(
+            resume_id=1, target_position="Python", difficulty="medium",
+            total_questions=5,
+            questions_data=[{"question": "Q0"}, {"question": "Q1"}, {"question": "Q2"}],
+        )
+        mock_repo.get_by_id_for_user = AsyncMock(return_value=interview)
         state = {
             "interview_id": 1,
+            "user_id": 1,
             "current_index": 1,
             "questions": [{"question": "Q0"}, {"question": "Q1"}, {"question": "Q2"}],
         }
@@ -443,6 +461,64 @@ class TestAskQuestion:
         mock_repo.update_question_index.assert_called_once_with(mock_db, 1, 2)
         assert result["current_index"] == 2
         assert result["next_question"] == "Q2"
+
+    async def test_progressive_generates_and_persists(self, monkeypatch):
+        """渐进模式：next_index >= len(questions) → 现场生成并落库"""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from app.workflows.interview.nodes import ask_question as ask_mod
+        from app.workflows.interview.nodes.ask_question import ask_question_node
+
+        interview = SimpleNamespace(
+            resume_id=1, target_position="Python 后端", difficulty="medium",
+            total_questions=3,
+            questions_data=[{"question": "Q0"}, {"question": "Q1"}],
+            current_question_index=1,
+        )
+        resume = SimpleNamespace(parsed_content='{"skills": ["Python"]}')
+
+        db = AsyncMock()
+        db.get = AsyncMock(return_value=resume)
+
+        repo = AsyncMock()
+        repo.get_by_id_for_user.return_value = interview
+
+        candidates = [{
+            "id": 1, "question": "讲下 Python 的 GIL",
+            "reference_answer": "GIL 是全局解释器锁...", "key_points": ["GIL"],
+            "difficulty": "medium", "position_tag": "python_backend",
+            "similarity": 0.9, "source": "from_bank",
+        }]
+
+        async def fake_prepare(**kwargs):
+            return candidates
+
+        async def fake_gen(**kwargs):
+            yield ("token", '{"index": 2, "question": "讲下 GIL（微调）", "category": "technical", "bank_id": 1}')
+            yield ("result", {
+                "question": "讲下 GIL（微调）", "category": "technical", "bank_id": 1,
+                "reference_answer": "GIL 是全局解释器锁...", "source": "from_bank",
+            })
+
+        monkeypatch.setattr(ask_mod, "interview_repo", repo)
+        monkeypatch.setattr(ask_mod.interview_service, "_prepare_questions", fake_prepare)
+        monkeypatch.setattr(ask_mod.ai_service, "generate_next_question_stream", fake_gen)
+        monkeypatch.setattr(ask_mod.question_bank_service, "increment_use_count", AsyncMock())
+
+        state = {
+            "interview_id": 1, "user_id": 1, "current_index": 1,
+            "questions": [{"question": "Q0"}, {"question": "Q1"}],
+            "chat_history": [],
+        }
+        result = await ask_question_node(state, {"configurable": {"db": db}})
+
+        assert result["current_index"] == 2
+        assert result["next_question"] == "讲下 GIL（微调）"
+        assert result["index"] == 2
+        assert interview.questions_data[-1]["question"] == "讲下 GIL（微调）"
+        assert interview.current_question_index == 2
+        repo.create_message.assert_called_once()
 
 
 @pytest.mark.unit
