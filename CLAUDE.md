@@ -189,7 +189,8 @@ cd ai-interview-admin && npm install && npm run dev        # 本地 → 3001；�
 
 ## 当前状态
 
-**2026-08-03（最新）**：项目完整可运行。`pytest -m "unit"` 全绿（115 passed），前端 build 通过。最新完成：
+**2026-08-03（最新）**：项目完整可运行。`pytest -m "unit"` 全绿（142 passed），前端/管理端 build 通过。最新完成：
+- **任意简历可用——岗位匹配 LLM 兜底**（2026-08-03）：`match_positions` 加 `MIN_MATCH_SCORE`（0.25）阈值，最佳分低于阈值时不再硬塞 IT 模板，改由 `ai_service.synthesize_positions` LLM 从画像合成 1-3 个岗位并落库为 `category="custom"` 模板行（sha1 幂等 tag，ValueError/IntegrityError 竞态兜底，custom 行不参与后续匹配）；画像 prompt `position_hints` 放宽为自由填写；6 个出题/评分 prompt 去技术向措辞；backoffice category 枚举扩 `custom`；Agent 输出 schema 补 `category`，前端 PositionMatch 对 custom 岗位显示"AI 定制"标签、上传页加"不确定做什么？试试 AI 岗位匹配"入口。验证：`pytest -m "unit"` 142 passed、前端/管理端 build 通过。spec：`docs/superpowers/specs/2026-08-03-arbitrary-resume-fallback-design.md`；计划：`docs/superpowers/plans/2026-08-03-arbitrary-resume-fallback.md`（9 任务 TDD 全落地，11 commit）
 - **出题/反馈"非流式"根因修复**（2026-08-03）：定位为 `get_chat_llm()` 默认 `streaming=False`——`langchain-openai` 的 `ChatOpenAI(streaming=False)` 会把 `.astream()` 响应**缓冲成单块一次性 yield**（底层虽是 stream=true 请求）。容器内实测：False→1 chunk/9.7s，True→121 chunk/2.5s。修复：5 处流式调用点补 `streaming=True`（`evaluate.py` / `generate_report.py` / `ai_service.py` 的 `select_and_adapt_questions_stream` + `generate_next_question_stream` 两分支）。验证：真实路径产出 176 token chunk；`pytest -m "unit"` 115 passed；uvicorn StatReload 自动重启，**dev 环境无需重建镜像**（bind mount + reload）。教训：**任何新增 `.astream()` 链路必须传 `streaming=True`**
 - **面试中逐题实时生成**（2026-08-03）：岗位匹配入口快建（`generate_questions=False`）→
   新 SSE 端点 `POST /interviews/{id}/next-question` 挂载生成第 1 题 →
@@ -214,7 +215,7 @@ cd ai-interview-admin && npm install && npm run dev        # 本地 → 3001；�
 3. **前端 `startInterview` 导出已无引用**——保留作回退
 4. **部署/生产 DB 大概率缺 embedding 列**（全真链路验证暴露）——上线前必须执行 `alembic upgrade head` + `scripts/rebuild_embeddings.py`（question_bank 84/84 + knowledge_chunks 32/32）
 5. **两个手动 E2E 未做**：出题 SSE（`?stream=true` 需真实 token + 已完成简历）；一键启动前端窗口内 npm 服务（需交互终端跑 `./start.sh` 人工确认）
-6. **【下次执行】任意简历可用——岗位匹配 LLM 兜底**：非技术/任意简历当前会被硬塞进 8 个 IT 模板且无最低分阈值。方案 A（模板优先 + `MIN_MATCH_SCORE` 阈值 + LLM 合成岗位落库 `category="custom"`，Agent 5 工具链不拆壳）。spec：`docs/superpowers/specs/2026-08-03-arbitrary-resume-fallback-design.md`；计划：`docs/superpowers/plans/2026-08-03-arbitrary-resume-fallback.md`（9 任务 TDD、每任务独立 commit，按 subagent-driven 直接执行即可）
+6. **【已完成 2026-08-03】任意简历可用——岗位匹配 LLM 兜底**：方案 A 已实施（模板优先 + `MIN_MATCH_SCORE` 阈值 + LLM 合成岗位落库 `category="custom"`，Agent 5 工具链不拆壳）。完成记录见上方"当前状态"。**未做**：非技术简历人工 E2E（需真实 DeepSeek token + 市场营销类简历，验证"AI 定制"标签实际渲染 + 非技术逐题出题）
 
 ### 里程碑（2026-08-02 及之前，详见 `docs/PROJECT_HISTORY.md`）
 
