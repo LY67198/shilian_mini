@@ -96,6 +96,14 @@ class TestDocxExtraction:
         # 文本框内容排在最后（页眉页脚之后）
         assert text.index("TextBoxLine") > text.index("A2 | B2")
 
+    def test_empty_docx_raises(self, tmp_path):
+        from docx import Document
+        p = tmp_path / "empty.docx"
+        Document().save(str(p))
+        with pytest.raises(ValidationError) as e:
+            extract_resume_text(str(p), "empty.docx")
+        assert "无法从文件中提取文本内容" in e.value.detail
+
 
 @pytest.mark.unit
 class TestPptxExtraction:

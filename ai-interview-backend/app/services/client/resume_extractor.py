@@ -40,6 +40,9 @@ def extract_resume_text(file_path: str, file_name: str) -> str:
         text = _extract_docx_text(file_path)
     else:
         text = _extract_pptx_text(file_path)
+
+    if not text.strip():
+        raise ValidationError(message="无法从文件中提取文本内容")
     return text
 
 
