@@ -42,4 +42,4 @@ class TestCandidateProfilePrompt:
         assert out["primary_stack"] == ["Python"]
         # 确认传给 LLM 的 system prompt 来自 YAML
         messages = fake_chat.call_args[0][0]
-        assert "资深技术面试官 + HR 顾问" in messages[0]["content"]
+        assert "资深招聘顾问 + HR 顾问" in messages[0]["content"]
