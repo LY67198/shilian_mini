@@ -25,6 +25,9 @@ from app.repositories.interview_repo import interview_repo
 from app.services.client.ai_service import ai_service
 from app.services.backoffice.position_template_service import position_template_service
 
+import hashlib
+from app.core.config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -161,6 +164,9 @@ async def match_positions(candidate_profile: dict, top_n: int = 3) -> dict:
     async with get_session_local()() as db:
         templates = await position_template_service.get_active_list(db)
 
+    # 排除系统兜底生成的 custom 模板（不参与岗位匹配）
+    templates = [t for t in templates if getattr(t, "category", None) != "custom"]
+
     if not templates:
         return {"recommended_positions": [], "warning": "岗位模板库为空"}
 
@@ -170,36 +176,127 @@ async def match_positions(candidate_profile: dict, top_n: int = 3) -> dict:
         scored.append((t, score, matched, missing))
 
     scored.sort(key=lambda x: x[1], reverse=True)
-    top = scored[:top_n]
+    best_score = scored[0][1] if scored else 0.0
 
-    recommended = []
-    for t, score, matched, missing in top:
-        reasons = []
-        if matched:
-            reasons.append(f"具备 {', '.join(matched[:3])} 等核心技能")
-        if t.position_tag in (candidate_profile.get("position_hints") or []):
-            reasons.append("候选人画像与该岗位方向一致")
-        directions = candidate_profile.get("project_directions") or []
-        keywords = t.project_keywords or []
-        if directions and keywords:
-            overlap = [d for d in directions if any(str(kw).lower() in str(d).lower() for kw in keywords)]
-            if overlap:
-                reasons.append(f"项目方向匹配（{overlap[0]}）")
-        if not reasons:
-            reasons.append("整体技术栈与岗位要求有一定重合")
+    # 最高分达到阈值 → 走模板匹配（现状）
+    if best_score >= settings.MIN_MATCH_SCORE:
+        top = scored[:top_n]
+        recommended = [
+            _build_template_recommendation(candidate_profile, t, score, matched, missing)
+            for t, score, matched, missing in top
+        ]
+        return {"recommended_positions": recommended, "match_source": "template"}
 
-        recommended.append({
-            "position_tag": t.position_tag,
-            "title": t.title,
-            "category": t.category,
-            "level": t.level,
-            "match_score": score,
-            "matched_skills": matched,
-            "missing_skills": missing[:5],
-            "reasons": reasons,
-        })
+    # 最高分低于阈值 → LLM 合成岗位兜底
+    synthesized = await _synthesize_and_persist(candidate_profile)
+    if synthesized:
+        return {"recommended_positions": synthesized, "match_source": "custom"}
 
-    return {"recommended_positions": recommended}
+    # 合成失败兜底：返回最高分模板并标注低匹配度
+    logger.warning("[match_positions] LLM 合成岗位失败，回退最高分模板")
+    t, score, matched, missing = scored[0]
+    recommended = [
+        _build_template_recommendation(candidate_profile, t, score, matched, missing)
+    ]
+    return {"recommended_positions": recommended, "match_source": "fallback_low"}
+
+
+def _build_template_recommendation(
+    candidate_profile: dict,
+    template: PositionTemplate,
+    score: float,
+    matched: list,
+    missing: list,
+) -> dict:
+    """把单个模板匹配结果构造成推荐条目（模板/兜底共用，DRY）。"""
+    reasons = []
+    if matched:
+        reasons.append(f"具备 {', '.join(matched[:3])} 等核心技能")
+    if template.position_tag in (candidate_profile.get("position_hints") or []):
+        reasons.append("候选人画像与该岗位方向一致")
+    directions = candidate_profile.get("project_directions") or []
+    keywords = template.project_keywords or []
+    if directions and keywords:
+        overlap = [d for d in directions if any(str(kw).lower() in str(d).lower() for kw in keywords)]
+        if overlap:
+            reasons.append(f"项目方向匹配（{overlap[0]}）")
+    if not reasons:
+        reasons.append("整体技能与岗位要求有一定重合")
+
+    return {
+        "position_tag": template.position_tag,
+        "title": template.title,
+        "category": getattr(template, "category", None),
+        "level": getattr(template, "level", None),
+        "match_score": score,
+        "matched_skills": matched,
+        "missing_skills": missing[:5],
+        "reasons": reasons,
+    }
+
+
+def _to_confidence(value) -> float:
+    """LLM confidence 可能返回非数值（'high'/'80%'），安全转 float，失败回退 0.5。"""
+    try:
+        num = float(value) if value is not None else 0.5
+        return 0.0 if num < 0 else (1.0 if num > 1 else num)
+    except (TypeError, ValueError):
+        return 0.5
+
+
+async def _synthesize_and_persist(candidate_profile: dict) -> list:
+    """LLM 合成岗位并落库为 category=custom 模板，返回 recommended 形状列表。
+
+    同一标题重复合成 → position_tag 稳定（title 的 sha1 前 8 位），幂等复用。
+    """
+    try:
+        positions = await ai_service.synthesize_positions(candidate_profile)
+    except Exception as e:
+        logger.error(f"[match_positions] 岗位合成失败: {e}")
+        return []
+    if not positions:
+        return []
+
+    result = []
+    async with get_session_local()() as db:
+        for p in positions:
+            title = (p.get("title") or "").strip()
+            if not title:
+                continue
+            tag = "custom_" + hashlib.sha1(title.encode("utf-8")).hexdigest()[:8]
+            existing = await position_template_service.get_by_tag(db, tag)
+            if existing is None:
+                try:
+                    await position_template_service.create(db, {
+                        "position_tag": tag,
+                        "title": title,
+                        "category": "custom",
+                        "level": "junior",
+                        "core_skills": p.get("core_skills") or [],
+                        "nice_to_have_skills": [],
+                        "project_keywords": [],
+                        "focus_topics": p.get("focus_topics") or [],
+                        "recommended_query_keywords": [],
+                        "recommended_difficulty": "medium",
+                        "recommended_question_count": 7,
+                        "jd_summary": p.get("reasons") or "",
+                        "typical_companies": [],
+                        "sort_order": 0,
+                        "is_active": True,
+                    })
+                except ValueError:
+                    logger.warning(f"[match_positions] custom 模板 {tag} 已存在，跳过创建")
+            result.append({
+                "position_tag": tag,
+                "title": title,
+                "category": "custom",
+                "level": "junior",
+                "match_score": round(_to_confidence(p.get("confidence")), 4),
+                "matched_skills": p.get("core_skills") or [],
+                "missing_skills": [],
+                "reasons": [p.get("reasons") or ""],
+            })
+    return result
 
 
 # ── 工具 4：获取岗位面试方向 ────────────────────────────────────────────
