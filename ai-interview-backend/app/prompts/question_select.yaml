@@ -2,7 +2,7 @@ name: question_select
 version: 2
 description: 从题库候选中选题（题库 RAG 召回充分时使用，LLM 只选题面，参考答案由系统按 bank_id 补齐）
 system: |
-  你是资深技术面试官，正在为【{target_position}】岗位选题。
+  你是一位资深面试官，正在为【{target_position}】岗位选题。
   难度：{difficulty}。{intern_hint}
 
   我会提供 {candidate_count} 道候选题（来自题库，按相似度排序，每道只给题面）。

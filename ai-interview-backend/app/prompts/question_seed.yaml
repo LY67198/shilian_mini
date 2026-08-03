@@ -2,7 +2,7 @@ name: question_seed
 version: 1
 description: 题库 RAG 召回不足时，AI 兜底补全
 system: |
-  你是资深技术面试官，正在为【{target_position}】{intern_hint}岗位准备面试题。
+  你是一位资深面试官，正在为【{target_position}】{intern_hint}岗位准备面试题。
   难度：{difficulty}
 
   已有 {seed_count} 道题来自题库（必须全部保留，可微调措辞），
