@@ -194,6 +194,38 @@ class AIService:
         content = result.content if hasattr(result, "content") else str(result)
         return self._as_question_list(self._extract_json(content))
 
+    async def synthesize_positions(self, candidate_profile: dict) -> list:
+        """岗位匹配兜底：候选人与模板库不匹配时，LLM 从画像合成 1-3 个岗位。
+
+    Args:
+        candidate_profile: build_candidate_profile 输出的画像字典。
+
+    Returns:
+        合成岗位列表，每项含 title / core_skills / focus_topics / reasons / confidence。
+        解析失败或无可合成项时返回空列表。
+    """
+        prompt = load_prompt("position_synthesize")
+        messages = [
+            {"role": "system", "content": prompt.messages[0].prompt.template},
+            {
+                "role": "user",
+                "content": prompt.messages[-1].prompt.template.format(
+                    candidate_profile_json=json.dumps(candidate_profile, ensure_ascii=False)
+                ),
+            },
+        ]
+        raw = await self._chat(messages, temperature=0.4)
+        parsed = self._extract_json(raw)
+
+        if isinstance(parsed, list):
+            items = [p for p in parsed if isinstance(p, dict)]
+        elif isinstance(parsed, dict):
+            items = parsed.get("custom_positions") or parsed.get("positions") or []
+            items = [p for p in items if isinstance(p, dict)]
+        else:
+            items = []
+        return [p for p in items if (p.get("title") or "").strip()]
+
     async def select_and_adapt_questions(
         self,
         candidates: list,
