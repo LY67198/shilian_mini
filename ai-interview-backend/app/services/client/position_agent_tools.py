@@ -301,6 +301,7 @@ async def start_mock_interview(
                 target_position=template.title,
                 difficulty=final_difficulty,
                 total_questions=final_total,
+                generate_questions=False,  # 岗位匹配入口快建：首题由 next-question 端点生成
             )
             result["position_tag"] = position_tag
             return result

@@ -166,3 +166,21 @@ class TestStartMockInterviewIdempotency:
         assert result["position_tag"] == "python_backend"
         assert result["first_question"] == "新问题"
         start_mock.assert_awaited_once()
+
+    async def test_fast_create_passes_generate_questions_false(self, monkeypatch):
+        from app.services.client.position_agent_tools import start_mock_interview
+
+        start_mock = self._patch_tool_deps(monkeypatch, active=None)
+        start_mock.return_value = {
+            "interview_id": 7, "first_question": None,
+            "question_index": 0, "total_questions": 5,
+        }
+
+        result = await start_mock_interview.ainvoke({
+            "resume_id": 1,
+            "position_tag": "python_backend",
+        })
+
+        assert result["interview_id"] == 7
+        assert result["first_question"] is None
+        assert start_mock.call_args.kwargs["generate_questions"] is False
