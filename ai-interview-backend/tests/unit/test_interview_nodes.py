@@ -28,9 +28,20 @@ class TestCheckFinished:
         result = await check_finished_node(state)
         assert result == {"is_finished": True}  # 0 + 1 >= 0 → True
 
-    async def test_fewer_questions_than_target_still_finishes(self):
-        """LLM 出题不足（len(questions) < total_questions）时按实际题数结束"""
+    async def test_progressive_not_finished_until_total_reached(self):
+        """渐进模式：questions 少于 total 时不结束，继续生成"""
         state = {"current_index": 4, "questions": [{}] * 5, "total_questions": 8}
+        result = await check_finished_node(state)
+        assert result == {"is_finished": False}
+
+    async def test_progressive_finished_at_total(self):
+        state = {"current_index": 7, "questions": [{}] * 5, "total_questions": 8}
+        result = await check_finished_node(state)
+        assert result == {"is_finished": True}
+
+    async def test_pre_generated_equivalent_when_len_equals_total(self):
+        """预生成正常路径 total==len 时行为与旧逻辑一致"""
+        state = {"current_index": 4, "questions": [{}] * 5, "total_questions": 5}
         result = await check_finished_node(state)
         assert result == {"is_finished": True}
 
