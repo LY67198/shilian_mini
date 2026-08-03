@@ -2,6 +2,7 @@
 
 核心端点：
 - POST /start — 创建面试会话
+- POST /{id}/next-question — 逐题实时生成当前题目（SSE 流式返回）
 - POST /{id}/answer — 提交回答，支持 ?stream=true 走 SSE
 - GET /{id}/report — 获取面试评估报告
 - GET /{id}/messages — 获取全部对话消息
@@ -115,6 +116,33 @@ async def submit_answer(
             interview_id=interview_id,
             answer=data.answer,
             stream=True,
+        ):
+            yield sse_str
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/{interview_id}/next-question")
+async def generate_next_question(
+    interview_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    interview_service: InterviewService = Depends(get_interview_service),
+):
+    """逐题实时生成：确保当前待回答问题存在（缺失则现场生成并 SSE 流式返回）"""
+    async def event_generator():
+        async for sse_str in interview_service.generate_next_question_stream(
+            db=db,
+            user_id=current_user.id,
+            interview_id=interview_id,
         ):
             yield sse_str
 

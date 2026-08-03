@@ -55,3 +55,29 @@ class TestStartStreamRoute:
         assert isinstance(resp, JSONResponse)
         assert not isinstance(resp, StreamingResponse)
         svc.start_interview.assert_awaited_once()
+
+
+@pytest.mark.unit
+class TestNextQuestionRoute:
+    async def test_returns_streaming_response(self):
+        from app.api.client.v1.interview import generate_next_question
+
+        async def fake_gen(**kwargs):
+            yield "event: status\ndata: {\"message\": \"正在检索题库...\"}\n\n"
+            yield "event: done\ndata: {\"index\": 0, \"question\": \"Q0\"}\n\n"
+
+        svc = SimpleNamespace(generate_next_question_stream=fake_gen)
+        resp = await generate_next_question(
+            interview_id=1,
+            current_user=SimpleNamespace(id=1),
+            db=AsyncMock(),
+            interview_service=svc,
+        )
+
+        assert isinstance(resp, StreamingResponse)
+        assert resp.media_type == "text/event-stream"
+        assert resp.headers["X-Accel-Buffering"] == "no"
+
+        chunks = [s async for s in resp.body_iterator]
+        assert len(chunks) == 2
+        assert "question\": \"Q0" in chunks[1]
