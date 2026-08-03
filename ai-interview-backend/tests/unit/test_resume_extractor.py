@@ -66,3 +66,31 @@ class TestDocxExtraction:
         assert "A2 | B2" in text
         assert "HeaderText" in text
         assert text.index("Hello World") < text.index("A1 | B1")
+
+    def _inject_textbox(self, path):
+        """在 word/document.xml 末尾注入一个文本框（VML + w:txbxContent）。"""
+        import zipfile
+        with zipfile.ZipFile(str(path)) as z:
+            names = z.namelist()
+            data = {n: z.read(n) for n in names}
+        xml = data["word/document.xml"].decode("utf-8")
+        textbox_xml = (
+            '<w:p><w:r><w:pict>'
+            '<v:shape xmlns:v="urn:schemas-microsoft-com:vml">'
+            '<w:txbxContent><w:p><w:r><w:t>TextBoxLine</w:t></w:r></w:p></w:txbxContent>'
+            '</v:shape></w:pict></w:r></w:p>'
+        )
+        xml = xml.replace("</w:body>", textbox_xml + "</w:body>")
+        data["word/document.xml"] = xml.encode("utf-8")
+        with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as z:
+            for n, content in data.items():
+                z.writestr(n, content)
+
+    def test_textbox_extracted(self, tmp_path):
+        p = tmp_path / "tb.docx"
+        self._build_docx(p, include_header=False)
+        self._inject_textbox(p)
+        text = extract_resume_text(str(p), "tb.docx")
+        assert "TextBoxLine" in text
+        # 文本框内容排在最后（页眉页脚之后）
+        assert text.index("TextBoxLine") > text.index("A2 | B2")

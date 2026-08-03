@@ -70,6 +70,7 @@ def _extract_pdf_text(file_path: str) -> str:
 def _extract_docx_text(file_path: str) -> str:
     """全面提取 docx：段落 + 表格 + 页眉页脚（文本框在 Task 4 补齐）。"""
     from docx import Document
+    from docx.oxml.ns import qn
 
     doc = Document(file_path)
     parts: list[str] = []
@@ -93,6 +94,13 @@ def _extract_docx_text(file_path: str) -> str:
             for para in part.paragraphs:
                 if para.text.strip():
                     parts.append(para.text.strip())
+
+    # 文本框（走底层 OOXML w:txbxContent）
+    for txbx in doc.element.body.iter(qn("w:txbxContent")):
+        for t_para in txbx.iter(qn("w:p")):
+            text = "".join(node.text or "" for node in t_para.iter(qn("w:t")))
+            if text.strip():
+                parts.append(text.strip())
 
     return "\n".join(parts)
 
