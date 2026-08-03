@@ -34,14 +34,18 @@ async def astream_to_sse(
     """将 LangGraph astream_events() 输出转换为 SSE 事件字符串
 
     映射规则：
-    - on_chat_model_stream → event: chunk
+    - on_chat_model_stream → event: chunk（反馈/报告）；ask_question 节点内 → event: question_chunk（出题）
     - on_chain_start (已知节点名) → event: status
     - on_chain_end (evaluate with dict output) → event: score
     - on_chain_end (ask_question with next_question) → event: next_question
     - on_chain_end (generate_report) → event: report
     - on_tool_start / on_tool_end → event: tool (debug 模式)
     - 异常 → event: error
+
+    出题/反馈区分：优先取事件 metadata.langgraph_node；缺失时用 on_chain_start 追踪的
+    _current_node 兜底（图线性，可靠）。
     """
+    _current_node = ""
     async for event in event_stream:
         kind = event.get("event", "")
         name = event.get("name", "")
@@ -49,13 +53,20 @@ async def astream_to_sse(
         if kind == "on_chat_model_stream":
             chunk = event.get("data", {}).get("chunk")
             if chunk and hasattr(chunk, "content") and chunk.content:
-                yield _sse("chunk", {"content": chunk.content})
+                node = event.get("metadata", {}).get("langgraph_node", "") or _current_node
+                if node == "ask_question":
+                    yield _sse("question_chunk", {"content": chunk.content})
+                else:
+                    yield _sse("chunk", {"content": chunk.content})
 
         elif kind == "on_chain_start":
             if name in _NODE_LABELS:
+                _current_node = name
                 yield _sse("status", {"node": name, "message": _NODE_LABELS[name]})
 
         elif kind == "on_chain_end":
+            if name in _NODE_LABELS:
+                _current_node = ""
             output = event.get("data", {}).get("output")
             if name == "evaluate" and isinstance(output, dict) and "score" in output:
                 yield _sse("score", {
