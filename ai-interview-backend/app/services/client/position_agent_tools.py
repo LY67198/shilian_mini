@@ -258,44 +258,52 @@ async def _synthesize_and_persist(candidate_profile: dict) -> list:
         return []
 
     result = []
-    async with get_session_local()() as db:
-        for p in positions:
-            title = (p.get("title") or "").strip()
-            if not title:
-                continue
-            tag = "custom_" + hashlib.sha1(title.encode("utf-8")).hexdigest()[:8]
-            existing = await position_template_service.get_by_tag(db, tag)
-            if existing is None:
-                try:
-                    await position_template_service.create(db, {
-                        "position_tag": tag,
-                        "title": title,
-                        "category": "custom",
-                        "level": "junior",
-                        "core_skills": p.get("core_skills") or [],
-                        "nice_to_have_skills": [],
-                        "project_keywords": [],
-                        "focus_topics": p.get("focus_topics") or [],
-                        "recommended_query_keywords": [],
-                        "recommended_difficulty": "medium",
-                        "recommended_question_count": 7,
-                        "jd_summary": p.get("reasons") or "",
-                        "typical_companies": [],
-                        "sort_order": 0,
-                        "is_active": True,
-                    })
-                except ValueError:
-                    logger.warning(f"[match_positions] custom 模板 {tag} 已存在，跳过创建")
-            result.append({
-                "position_tag": tag,
-                "title": title,
-                "category": "custom",
-                "level": "junior",
-                "match_score": round(_to_confidence(p.get("confidence")), 4),
-                "matched_skills": p.get("core_skills") or [],
-                "missing_skills": [],
-                "reasons": [p.get("reasons") or ""],
-            })
+    try:
+        async with get_session_local()() as db:
+            for p in positions:
+                title = (p.get("title") or "").strip()
+                if not title:
+                    continue
+                tag = "custom_" + hashlib.sha1(title.encode("utf-8")).hexdigest()[:8]
+                existing = await position_template_service.get_by_tag(db, tag)
+                if existing is None:
+                    try:
+                        await position_template_service.create(db, {
+                            "position_tag": tag,
+                            "title": title,
+                            "category": "custom",
+                            "level": "junior",
+                            "core_skills": p.get("core_skills") or [],
+                            "nice_to_have_skills": [],
+                            "project_keywords": [],
+                            "focus_topics": p.get("focus_topics") or [],
+                            "recommended_query_keywords": [],
+                            "recommended_difficulty": "medium",
+                            "recommended_question_count": 7,
+                            "jd_summary": p.get("reasons") or "",
+                            "typical_companies": [],
+                            "sort_order": 0,
+                            "is_active": True,
+                        })
+                    except ValueError:
+                        logger.warning(f"[match_positions] custom 模板 {tag} 已存在，跳过创建")
+                        continue
+                    except Exception as e:
+                        logger.warning(f"[match_positions] custom 模板 {tag} 落库失败，跳过: {e}")
+                        continue
+                result.append({
+                    "position_tag": tag,
+                    "title": title,
+                    "category": "custom",
+                    "level": "junior",
+                    "match_score": round(_to_confidence(p.get("confidence")), 4),
+                    "matched_skills": p.get("core_skills") or [],
+                    "missing_skills": [],
+                    "reasons": [p.get("reasons") or ""],
+                })
+    except Exception as e:
+        logger.error(f"[match_positions] custom 模板落库会话异常，整体回退模板兜底: {e}")
+        return []
     return result
 
 

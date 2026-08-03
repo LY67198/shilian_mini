@@ -35,6 +35,7 @@ system: |
       {{
         "position_tag": "...",
         "title": "...",
+        "category": "岗位类别，custom 表示 AI 定制岗位",
         "match_score": 0.84,
         "reasons": [...],
         "missing_skills": [...]

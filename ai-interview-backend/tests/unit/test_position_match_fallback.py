@@ -148,3 +148,19 @@ class TestMatchPositionsFallback:
         # custom 模板被排除（即使技能高度匹配），best_score 只来自 low（0 分）→ 低于阈值走合成
         assert out["match_source"] == "fallback_low"
         assert "某定制岗位" not in [p["title"] for p in out["recommended_positions"]]
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("high", 0.5),
+            ("80%", 0.5),
+            (None, 0.5),
+            (-0.1, 0.0),
+            (1.5, 1.0),
+            ("0.72", 0.72),
+            (0.72, 0.72),
+        ],
+    )
+    def test_to_confidence_coerces(self, raw, expected):
+        from app.services.client.position_agent_tools import _to_confidence
+        assert _to_confidence(raw) == expected
