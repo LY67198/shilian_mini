@@ -22,7 +22,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 class ResumeService:
-    """简历服务 — 简历上传、PDF 解析、AI 解析分析和简历管理。"""
+    """简历服务 — 简历上传、简历解析、AI 解析分析和简历管理。"""
 
     async def upload_and_parse(
         self,
@@ -40,7 +40,7 @@ class ResumeService:
         Args:
             db: 数据库会话。
             user_id: 上传用户 ID。
-            file_content: PDF 文件二进制内容。
+            file_content: 简历文件二进制内容（PDF / DOCX / PPTX）。
             file_name: 原始文件名。
             target_position: 目标岗位，用于简历分析提示。
 

@@ -43,7 +43,7 @@ class TestUploadAndParse:
                     db=db, user_id=1, file_content=b"fake", file_name="r.docx",
                     target_position="Python",
                 )
-        assert "无法从文件" in e.value.detail
+        assert e.value.detail == "无法从文件中提取文本内容"
 
     async def test_generic_error_wrapped(self, tmp_path):
         svc, db = self._svc_db()
