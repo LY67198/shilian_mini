@@ -520,6 +520,98 @@ class TestAskQuestion:
         assert interview.current_question_index == 2
         repo.create_message.assert_called_once()
 
+    async def test_progressive_empty_question_raises(self, monkeypatch):
+        """渐进模式：流式结果 question 为空 → 抛"下一题生成失败"，不落库"""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from app.workflows.interview.nodes import ask_question as ask_mod
+        from app.workflows.interview.nodes.ask_question import ask_question_node
+
+        interview = SimpleNamespace(
+            resume_id=1, target_position="Python 后端", difficulty="medium",
+            total_questions=3,
+            questions_data=[{"question": "Q0"}, {"question": "Q1"}],
+            current_question_index=1,
+        )
+        resume = SimpleNamespace(parsed_content='{"skills": ["Python"]}')
+
+        db = AsyncMock()
+        db.get = AsyncMock(return_value=resume)
+
+        repo = AsyncMock()
+        repo.get_by_id_for_user.return_value = interview
+
+        candidates = [{
+            "id": 1, "question": "讲下 Python 的 GIL",
+            "reference_answer": "GIL 是全局解释器锁...", "key_points": ["GIL"],
+            "difficulty": "medium", "position_tag": "python_backend",
+            "similarity": 0.9, "source": "from_bank",
+        }]
+
+        async def fake_prepare(**kwargs):
+            return candidates
+
+        async def fake_gen(**kwargs):
+            yield ("result", {"question": "", "index": 2, "bank_id": None})
+
+        monkeypatch.setattr(ask_mod, "interview_repo", repo)
+        monkeypatch.setattr(ask_mod.interview_service, "_prepare_questions", fake_prepare)
+        monkeypatch.setattr(ask_mod.ai_service, "generate_next_question_stream", fake_gen)
+        monkeypatch.setattr(ask_mod.question_bank_service, "increment_use_count", AsyncMock())
+
+        state = {
+            "interview_id": 1, "user_id": 1, "current_index": 1,
+            "questions": [{"question": "Q0"}, {"question": "Q1"}],
+            "chat_history": [],
+        }
+
+        with pytest.raises(RuntimeError, match="下一题生成失败"):
+            await ask_question_node(state, {"configurable": {"db": db}})
+
+        repo.create_message.assert_not_called()
+        db.commit.assert_not_called()
+
+    async def test_progressive_prepare_failure_propagates(self, monkeypatch):
+        """渐进模式：_prepare_questions 抛异常 → 原样传播出节点，不落库"""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from app.workflows.interview.nodes import ask_question as ask_mod
+        from app.workflows.interview.nodes.ask_question import ask_question_node
+
+        interview = SimpleNamespace(
+            resume_id=1, target_position="Python 后端", difficulty="medium",
+            total_questions=3,
+            questions_data=[{"question": "Q0"}, {"question": "Q1"}],
+            current_question_index=1,
+        )
+        resume = SimpleNamespace(parsed_content='{"skills": ["Python"]}')
+
+        db = AsyncMock()
+        db.get = AsyncMock(return_value=resume)
+
+        repo = AsyncMock()
+        repo.get_by_id_for_user.return_value = interview
+
+        async def fake_prepare(**kwargs):
+            raise RuntimeError("检索失败")
+
+        monkeypatch.setattr(ask_mod, "interview_repo", repo)
+        monkeypatch.setattr(ask_mod.interview_service, "_prepare_questions", fake_prepare)
+
+        state = {
+            "interview_id": 1, "user_id": 1, "current_index": 1,
+            "questions": [{"question": "Q0"}, {"question": "Q1"}],
+            "chat_history": [],
+        }
+
+        with pytest.raises(RuntimeError, match="检索失败"):
+            await ask_question_node(state, {"configurable": {"db": db}})
+
+        repo.create_message.assert_not_called()
+        db.commit.assert_not_called()
+
 
 @pytest.mark.unit
 class TestGenerateReport:
