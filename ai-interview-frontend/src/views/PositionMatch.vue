@@ -130,6 +130,7 @@
             <div class="position-header">
               <span class="rank">#{{ idx + 1 }}</span>
               <span class="position-title">{{ pos.title }}</span>
+              <span v-if="pos.category === 'custom'" class="custom-badge">AI 定制</span>
               <span class="match-score">匹配度 {{ Math.round(pos.match_score * 100) }}%</span>
             </div>
             <div class="match-bar">
@@ -365,6 +366,14 @@ async function startInterview(positionTag) {
 .rank { background: #4f46e5; color: white; padding: 2px 10px; border-radius: 10px; font-size: 12px; font-weight: 700; }
 .position-title { font-size: 16px; font-weight: 600; flex: 1; }
 .match-score { color: #059669; font-weight: 600; font-size: 14px; }
+.custom-badge {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  color: #7c3aed;
+  background: #f3e8ff;
+}
 .match-bar { background: #f3f4f6; height: 6px; border-radius: 3px; margin-bottom: 14px; overflow: hidden; }
 .match-bar-fill { background: linear-gradient(90deg, #4f46e5, #818cf8); height: 100%; transition: width 0.6s; }
 .position-section { margin-bottom: 12px; }
