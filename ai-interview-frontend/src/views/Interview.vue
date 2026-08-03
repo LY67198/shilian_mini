@@ -292,6 +292,7 @@ async function handleSubmit() {
           messages.value.push({ role: 'interviewer', content: data.feedback, score: data.score })
         }
         streamingText.value = ''
+        streamingQuestion.value = ''
         feedbackJsonBuffer = ''
         const lastCandidate = [...messages.value].reverse().find(m => m.role === 'candidate')
         if (lastCandidate) lastCandidate.score = data.score
