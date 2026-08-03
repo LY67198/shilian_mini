@@ -16,6 +16,7 @@
         <div class="form-group">
           <label>目标岗位</label>
           <input v-model="targetPosition" placeholder="例如：Python后端开发工程师" />
+          <p class="hint">不确定自己能做什么？<router-link to="/position-match">试试 AI 岗位匹配 →</router-link></p>
         </div>
         <p v-if="error" class="error">{{ error }}</p>
         <button class="btn-primary" style="width:100%" @click="handleUpload" :disabled="!file || uploading">
@@ -473,4 +474,6 @@ async function handleStart() {
 .streamed-question { display: flex; gap: 8px; padding: 8px 12px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 8px; font-size: 13px; }
 .q-index { flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%; background: #4f46e5; color: #fff; text-align: center; line-height: 20px; font-size: 12px; }
 .q-text { color: #374151; line-height: 1.5; }
+.hint { font-size: 12px; color: #6b7280; margin-top: 6px; }
+.hint a { color: #2563eb; }
 </style>
