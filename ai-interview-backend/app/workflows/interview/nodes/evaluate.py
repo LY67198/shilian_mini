@@ -84,7 +84,7 @@ async def evaluate_node(state: InterviewState, config: RunnableConfig) -> dict:
 
     try:
         prompt = load_prompt("evaluator_agent")
-        llm = get_chat_llm(temperature=0.3)
+        llm = get_chat_llm(temperature=0.3, streaming=True)
         structured_llm = llm.bind(response_format={"type": "json_object"})
         chain = prompt | structured_llm
 

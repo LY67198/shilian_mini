@@ -277,7 +277,7 @@ class AIService:
         ]
 
         prompt = load_prompt("question_select")
-        llm = get_chat_llm(temperature=0.3)
+        llm = get_chat_llm(temperature=0.3, streaming=True)
         chain = prompt | llm
 
         chunks: list[str] = []
@@ -409,7 +409,7 @@ class AIService:
                 for c in candidates
             ]
             prompt = load_prompt("question_select_one")
-            llm = get_chat_llm(temperature=0.3)
+            llm = get_chat_llm(temperature=0.3, streaming=True)
             chain = prompt | llm
             chunks: list[str] = []
             try:
@@ -438,7 +438,7 @@ class AIService:
         else:
             # 分支 B：题库空 → 纯 AI 生成 1 题
             prompt = load_prompt("question_generate_one")
-            llm = get_chat_llm(temperature=0.7)
+            llm = get_chat_llm(temperature=0.7, streaming=True)
             chain = prompt | llm
             chunks: list[str] = []
             try:

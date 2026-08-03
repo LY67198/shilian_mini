@@ -61,7 +61,7 @@ async def generate_report_node(state: InterviewState, config: RunnableConfig) ->
 
     try:
         prompt = load_prompt("report_agent")
-        llm = get_chat_llm(temperature=0.5)
+        llm = get_chat_llm(temperature=0.5, streaming=True)
         structured_llm = llm.bind(response_format={"type": "json_object"})
         chain = prompt | structured_llm
 
