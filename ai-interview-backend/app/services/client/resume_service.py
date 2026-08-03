@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.models.resume import Resume
 from app.services.client.ai_service import ai_service
+from app.services.client.resume_extractor import extract_resume_text
 from app.exceptions.http_exceptions import NotFoundError, ValidationError, APIException
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ class ResumeService:
     ) -> Dict:
         """上传简历文件并触发 AI 解析和分析。
 
-        流程：保存文件 → 写 Resume 记录 → pdfplumber 抽文本 → AI 解析 + 分析 → 落库。
+        流程：保存文件 → 写 Resume 记录 → extractor 抽文本（PDF / DOCX / PPTX）→ AI 解析 + 分析 → 落库。
         中途任何步骤失败都会把状态置为 failed 并向上抛错。
 
         Args:
@@ -47,7 +48,7 @@ class ResumeService:
             包含 resume_id / status / message 的字典。
 
         Raises:
-            ValidationError: PDF 解析失败或 AI 解析失败。
+            ValidationError: 文件提取或 AI 解析失败。
         """
         # 保存文件到本地
         file_path = os.path.join(UPLOAD_DIR, f"{user_id}_{file_name}")
@@ -66,15 +67,17 @@ class ResumeService:
         await db.commit()
         await db.refresh(resume)
 
-        # 从 PDF 中提取文本
+        # 从文件中提取文本（PDF / DOCX / PPTX）
         try:
-            resume_text = self._extract_pdf_text(file_path)
-            if not resume_text.strip():
-                raise ValidationError(message="无法从 PDF 中提取文本内容")
+            resume_text = extract_resume_text(file_path, file_name)
+        except ValidationError:
+            resume.status = "failed"
+            await db.commit()
+            raise
         except Exception as e:
             resume.status = "failed"
             await db.commit()
-            raise ValidationError(message=f"PDF 解析失败: {str(e)}")
+            raise ValidationError(message=f"文件解析失败: {str(e)}")
 
         # 调用 AI 解析简历
         try:
@@ -99,24 +102,6 @@ class ResumeService:
             "status": resume.status,
             "message": "简历上传并解析成功"
         }
-
-    def _extract_pdf_text(self, file_path: str) -> str:
-        """从 PDF 文件中提取文本内容。
-
-    Args:
-        file_path: PDF 文件路径。
-
-    Returns:
-        所有页面拼接后的文本内容。
-    """
-        import pdfplumber
-        text = ""
-        with pdfplumber.open(file_path) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-        return text
 
     async def get_resume(self, db: AsyncSession, resume_id: int, user_id: int) -> Dict:
         """根据 ID 获取简历详情。
