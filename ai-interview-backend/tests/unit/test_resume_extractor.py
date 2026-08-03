@@ -92,5 +92,6 @@ class TestDocxExtraction:
         self._inject_textbox(p)
         text = extract_resume_text(str(p), "tb.docx")
         assert "TextBoxLine" in text
+        assert text.count("TextBoxLine") == 1
         # 文本框内容排在最后（页眉页脚之后）
         assert text.index("TextBoxLine") > text.index("A2 | B2")

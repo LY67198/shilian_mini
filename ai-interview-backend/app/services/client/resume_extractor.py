@@ -68,7 +68,7 @@ def _extract_pdf_text(file_path: str) -> str:
 
 
 def _extract_docx_text(file_path: str) -> str:
-    """全面提取 docx：段落 + 表格 + 页眉页脚（文本框在 Task 4 补齐）。"""
+    """全面提取 docx：段落 + 表格 + 页眉页脚 + 文本框（w:txbxContent）。"""
     from docx import Document
     from docx.oxml.ns import qn
 
