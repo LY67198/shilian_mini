@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.models import Interview, InterviewMessage
 from app.services.client import interview_service as mod
 
 
@@ -174,9 +175,6 @@ class TestStartInterviewFastCreate:
 
     @staticmethod
     def _make_db_mock():
-        from types import SimpleNamespace
-        from unittest.mock import AsyncMock
-
         resume = SimpleNamespace(status="completed", parsed_content='{"skills": ["Python"]}')
 
         class _Scalar:
@@ -185,7 +183,9 @@ class TestStartInterviewFastCreate:
 
         db = AsyncMock()
         db.execute.return_value = _Scalar()
-        db.add = lambda obj: None
+        # 捕获 db.add 的对象列表，供断言 Interview.questions_data / 不写 InterviewMessage
+        db.added = []
+        db.add = lambda obj: db.added.append(obj)
 
         async def fake_refresh(obj):
             obj.id = 99
@@ -197,9 +197,10 @@ class TestStartInterviewFastCreate:
         gen_mock = AsyncMock()
         monkeypatch.setattr(mod.InterviewService, "_generate_questions_with_rag", gen_mock)
 
+        db = self._make_db_mock()
         svc = mod.InterviewService()
         result = await svc.start_interview(
-            db=self._make_db_mock(),
+            db=db,
             user_id=1,
             resume_id=1,
             target_position="Python 后端",
@@ -214,16 +215,26 @@ class TestStartInterviewFastCreate:
         assert result["question_index"] == 0
         assert result["total_questions"] == 3
 
-    async def test_generate_by_default_runs_rag_and_writes_first_message(self, monkeypatch):
-        from unittest.mock import AsyncMock
+        # 快建：只落库 1 条 Interview（题目为空、题号从 0 开始），不写任何 InterviewMessage
+        interviews = [o for o in db.added if isinstance(o, Interview)]
+        messages = [o for o in db.added if isinstance(o, InterviewMessage)]
+        assert len(interviews) == 1
+        assert len(messages) == 0
+        interview = interviews[0]
+        assert interview.questions_data == []
+        assert interview.current_question_index == 0
 
+    async def test_generate_by_default_runs_rag_and_writes_first_message(self, monkeypatch):
         gen_mock = AsyncMock(return_value=[{"question": "Q0", "bank_id": 1}])
         monkeypatch.setattr(mod.InterviewService, "_generate_questions_with_rag", gen_mock)
-        monkeypatch.setattr(mod.question_bank_service, "increment_use_count", AsyncMock())
 
+        inc_mock = AsyncMock()
+        monkeypatch.setattr(mod.question_bank_service, "increment_use_count", inc_mock)
+
+        db = self._make_db_mock()
         svc = mod.InterviewService()
         result = await svc.start_interview(
-            db=self._make_db_mock(),
+            db=db,
             user_id=1,
             resume_id=1,
             target_position="Python 后端",
@@ -233,3 +244,16 @@ class TestStartInterviewFastCreate:
 
         gen_mock.assert_awaited_once()
         assert result["first_question"] == "Q0"
+
+        # 默认路径：题库选中题目累加 use_count（bank_ids=[1]）
+        inc_mock.assert_awaited_once_with(db, [1])
+
+        # 默认路径：Interview 带题目，且写首条 InterviewMessage
+        interviews = [o for o in db.added if isinstance(o, Interview)]
+        messages = [o for o in db.added if isinstance(o, InterviewMessage)]
+        assert len(interviews) == 1
+        assert len(messages) == 1
+        assert interviews[0].questions_data == [{"question": "Q0", "bank_id": 1}]
+        assert messages[0].role == "interviewer"
+        assert messages[0].content == "Q0"
+        assert messages[0].question_index == 0
