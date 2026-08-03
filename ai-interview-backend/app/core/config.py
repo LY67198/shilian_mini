@@ -129,6 +129,9 @@ class Settings(BaseSettings):
     QUESTION_BANK_RECALL_FACTOR: int = 2
     QUESTION_BANK_TOP_K: int = 20
 
+    # 岗位匹配：低于该匹配分触发 LLM 合成岗位兜底
+    MIN_MATCH_SCORE: float = 0.25
+
     # ============= Phase 3: Hybrid Retrieval =============
     DASHSCOPE_RERANK_MODEL: str = "gte-rerank-v2"
     RRF_K: int = 60
