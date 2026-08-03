@@ -27,6 +27,20 @@ class _SessionCtx:
         return False
 
 
+class _FakeDb:
+    """记录 rollback 调用次数的假 session（供 IntegrityError 竞态测试用）。
+
+    真实 AsyncSession 的 rollback() 用来清掉 pending-rollback 的污染会话；
+    这里用计数验证代码确实在捕获 IntegrityError 后调用了 rollback。
+    """
+
+    def __init__(self):
+        self.rollback_calls = 0
+
+    async def rollback(self):
+        self.rollback_calls += 1
+
+
 @pytest.mark.unit
 class TestMatchPositionsFallback:
     IT_TEMPLATES = [
@@ -36,12 +50,12 @@ class TestMatchPositionsFallback:
                      project_keywords=["前端", "组件"]),
     ]
 
-    def _patch(self, monkeypatch, templates=None, existing_by_tag=None):
+    def _patch(self, monkeypatch, templates=None, existing_by_tag=None, db=None):
         from app.services.client import position_agent_tools as tools
 
         monkeypatch.setattr(
             tools, "get_session_local",
-            lambda: lambda: _SessionCtx(None),
+            lambda: lambda: _SessionCtx(db),
         )
         monkeypatch.setattr(
             tools.position_template_service, "get_active_list",
@@ -141,6 +155,38 @@ class TestMatchPositionsFallback:
         assert pos["position_tag"].startswith("custom_")
         assert pos["title"] == title
         create_mock.assert_awaited_once()
+
+    async def test_integrity_error_rollbacks_and_batch_continues(self, monkeypatch):
+        from sqlalchemy.exc import IntegrityError
+        from app.services.client import position_agent_tools as tools
+
+        fake_db = _FakeDb()
+        create_mock = self._patch(monkeypatch, existing_by_tag={}, db=fake_db)
+        # 模拟并发竞态：第一条 get_by_tag 见不到行 → create 撞唯一约束 IntegrityError
+        # （赢家已抢先提交）；第二条正常落库。rollback 后同一批处理继续。
+        create_mock.side_effect = [
+            IntegrityError(None, None, Exception("duplicate key value violates unique constraint ...")),
+            None,
+        ]
+        monkeypatch.setattr(
+            tools.ai_service, "synthesize_positions",
+            AsyncMock(return_value=[
+                {"title": "市场营销专员", "confidence": 0.7},
+                {"title": "新媒体运营", "confidence": 0.6},
+            ]),
+        )
+
+        profile = {"primary_stack": ["市场"], "secondary_stack": [], "project_directions": []}
+        out = await tools.match_positions.ainvoke({"candidate_profile": profile})
+
+        # 撞 IntegrityError 的岗位被跳过；批处理继续处理后续岗位；异常不外泄
+        assert out["match_source"] == "custom"
+        titles = [p["title"] for p in out["recommended_positions"]]
+        assert "市场营销专员" not in titles
+        assert "新媒体运营" in titles
+        # 捕获后必须 rollback 清掉 pending-rollback 的污染会话，否则下次 get_by_tag 抛 PendingRollbackError
+        assert fake_db.rollback_calls == 1
+        create_mock.assert_awaited()
 
     async def test_synthesize_failure_falls_back_to_top_template(self, monkeypatch):
         from app.services.client import position_agent_tools as tools

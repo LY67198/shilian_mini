@@ -18,6 +18,7 @@ import logging
 from typing import Optional
 from langchain_core.tools import tool
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from app.db.base import get_session_local
 from app.models.resume import Resume
 from app.models.position_template import PositionTemplate
@@ -287,6 +288,13 @@ async def _synthesize_and_persist(candidate_profile: dict) -> list:
                         })
                     except ValueError:
                         logger.warning(f"[match_positions] custom 模板 {tag} 并发竞态已创建，复用已有 tag")
+                    except IntegrityError as e:
+                        await db.rollback()
+                        logger.warning(
+                            f"[match_positions] custom 模板 {tag} 竞态落库 IntegrityError"
+                            f"（行已由并发请求创建），回滚并跳过: {e}"
+                        )
+                        continue
                     except Exception as e:
                         logger.warning(f"[match_positions] custom 模板 {tag} 落库失败，跳过: {e}")
                         continue
