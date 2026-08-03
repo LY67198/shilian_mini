@@ -189,9 +189,14 @@ cd ai-interview-admin && npm install && npm run dev        # 本地 → 3001；�
 
 ## 当前状态
 
-**2026-08-02（最新）**：项目完整可运行（本地 7 容器 / 部署 4 容器 lite 栈，目标 2GB ECS）。`pytest -m "unit"` **91 passed**，前端 `npm run build` 通过。最新完成：一键启动（本地开发）（见下）；历史里程碑见文末。
+**2026-08-03（最新）**：项目完整可运行。`pytest -m "unit"` 全绿（115 passed），前端 build 通过。最新完成：
+- **面试中逐题实时生成**（2026-08-03）：岗位匹配入口快建（`generate_questions=False`）→
+  新 SSE 端点 `POST /interviews/{id}/next-question` 挂载生成第 1 题 →
+  `ask_question_node` 双模现场生成第 N 题 → `check_finished` 按 `total_questions` 判断 →
+  `sse.py` 按 `langgraph_node` 区分 `question_chunk`/`chunk`，题目逐字流式。
+  上传页预生成路径零改动。spec：`docs/superpowers/specs/2026-08-02-progressive-question-streaming-design.md`；
+  计划：`docs/superpowers/plans/2026-08-03-progressive-question-streaming.md`
 - **面试反馈真流式化**（2026-08-02）：evaluate/generate_report 改 `astream + extract_json`（复用出题流式范式），SSE `chunk` 逐字流；前端 `Interview.vue` 改对象增量 JSON 解析，feedback/报告摘要逐字显示，移除 JSON 正则过滤。spec：`docs/superpowers/specs/2026-08-02-feedback-streaming-design.md`
-- **面试中逐题实时生成（设计已确认，待实现）**（2026-08-02）：岗位匹配入口渐进式出题 + 面试页/`ask_question_node` 逐题现场生成（双模兼容上传页预生成路径），题目逐字流式显示。根因：岗位匹配入口 `start_mock_interview` → `start_interview` 非流式一次性生成全部题。spec：`docs/superpowers/specs/2026-08-02-progressive-question-streaming-design.md`（方案 1，见待办 #6）
 
 ### 一键启动（本地开发）（✅ 已完成）
 
@@ -208,7 +213,6 @@ cd ai-interview-admin && npm install && npm run dev        # 本地 → 3001；�
 3. **前端 `startInterview` 导出已无引用**——保留作回退
 4. **部署/生产 DB 大概率缺 embedding 列**（全真链路验证暴露）——上线前必须执行 `alembic upgrade head` + `scripts/rebuild_embeddings.py`（question_bank 84/84 + knowledge_chunks 32/32）
 5. **两个手动 E2E 未做**：出题 SSE（`?stream=true` 需真实 token + 已完成简历）；一键启动前端窗口内 npm 服务（需交互终端跑 `./start.sh` 人工确认）
-6. **面试中逐题实时生成（设计已确认，待实施）**——spec `docs/superpowers/specs/2026-08-02-progressive-question-streaming-design.md`（方案 1）。下次执行：writing-plans → subagent-driven。核心改动：`start_mock_interview` 快建（`start_interview` 加 `generate_questions` 参数）+ 新 SSE 端点 `POST /interviews/{id}/next-question` + `ask_question_node` 双模 + `check_finished` 改 `total_questions` + `sse.py` 区分 `question_chunk`/`chunk`（`metadata.langgraph_node`）+ 新 prompt `question_select_one`/`question_generate_one` + 前端 `Interview.vue` 挂载生成第 1 题逐字显示
 
 ### 里程碑（2026-08-02 及之前，详见 `docs/PROJECT_HISTORY.md`）
 
