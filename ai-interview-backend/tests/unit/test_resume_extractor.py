@@ -40,3 +40,29 @@ class TestMagicByte:
         with pytest.raises(ValidationError) as e:
             extract_resume_text(str(p), "fake.docx")
         assert "文件内容与格式不匹配" in e.value.detail
+
+
+@pytest.mark.unit
+class TestDocxExtraction:
+    def _build_docx(self, path, include_header=True):
+        from docx import Document
+        doc = Document()
+        doc.add_paragraph("Hello World")
+        table = doc.add_table(rows=2, cols=2)
+        table.cell(0, 0).text = "A1"
+        table.cell(0, 1).text = "B1"
+        table.cell(1, 0).text = "A2"
+        table.cell(1, 1).text = "B2"
+        if include_header:
+            doc.sections[0].header.paragraphs[0].text = "HeaderText"
+        doc.save(str(path))
+
+    def test_paragraph_table_header(self, tmp_path):
+        p = tmp_path / "r.docx"
+        self._build_docx(p)
+        text = extract_resume_text(str(p), "r.docx")
+        assert "Hello World" in text
+        assert "A1 | B1" in text
+        assert "A2 | B2" in text
+        assert "HeaderText" in text
+        assert text.index("Hello World") < text.index("A1 | B1")

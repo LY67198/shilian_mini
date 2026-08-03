@@ -68,7 +68,33 @@ def _extract_pdf_text(file_path: str) -> str:
 
 
 def _extract_docx_text(file_path: str) -> str:
-    return ""
+    """全面提取 docx：段落 + 表格 + 页眉页脚（文本框在 Task 4 补齐）。"""
+    from docx import Document
+
+    doc = Document(file_path)
+    parts: list[str] = []
+
+    # 正文段落
+    for para in doc.paragraphs:
+        if para.text.strip():
+            parts.append(para.text.strip())
+
+    # 表格（每行单元格用 | 分隔）
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells]
+            cells = [c for c in cells if c]
+            if cells:
+                parts.append(" | ".join(cells))
+
+    # 页眉页脚
+    for section in doc.sections:
+        for part in (section.header, section.footer):
+            for para in part.paragraphs:
+                if para.text.strip():
+                    parts.append(para.text.strip())
+
+    return "\n".join(parts)
 
 
 def _extract_pptx_text(file_path: str) -> str:
