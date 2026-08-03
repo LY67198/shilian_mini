@@ -419,3 +419,166 @@ class TestNextQuestionPrompts:
         text = rendered.to_string()
         assert "第 1/3 题" in text
         assert "不要重复已经问过的题目" in text
+
+
+@pytest.mark.unit
+class TestGenerateNextQuestionStream:
+    """generate_next_question_stream — 选一/兜底两分支，token 序列 + result"""
+
+    CANDIDATES = [
+        {
+            "id": 1, "question": "讲下 Python 的 GIL",
+            "reference_answer": "GIL 是全局解释器锁...", "key_points": ["GIL"],
+            "difficulty": "medium", "position_tag": "python_backend",
+            "similarity": 0.9, "source": "from_bank",
+        },
+        {
+            "id": 2, "question": "asyncio 事件循环原理",
+            "reference_answer": "事件循环基于协程...", "key_points": ["协程"],
+            "difficulty": "medium", "position_tag": "python_backend",
+            "similarity": 0.85, "source": "from_bank",
+        },
+    ]
+
+    @staticmethod
+    def _patch_llm_stream(monkeypatch, chunks, capture=None):
+        from unittest.mock import AsyncMock
+
+        from app.services.client import ai_service as mod
+
+        chain = AsyncMock()
+
+        async def fake_astream(**kwargs):
+            if capture is not None:
+                capture["input"] = kwargs.get("input")
+            for c in chunks:
+                yield type("C", (), {"content": c})()
+
+        chain.astream = fake_astream
+        mock_prompt = type("P", (), {"__or__": lambda self, other: chain})()
+        monkeypatch.setattr(mod, "load_prompt", lambda name: mock_prompt)
+        monkeypatch.setattr(mod, "get_chat_llm", lambda **kw: object())
+        return chain
+
+    async def test_select_one_yields_tokens_then_merged_result(self, monkeypatch):
+        from app.services.client.ai_service import ai_service
+
+        chunks = [
+            '{"index": 0, "question": "讲下 Python 的 GIL（微调）", "category": "technical", "bank_id": 1}',
+        ]
+        self._patch_llm_stream(monkeypatch, chunks)
+
+        events = []
+        async for kind, payload in ai_service.generate_next_question_stream(
+            candidates=self.CANDIDATES,
+            parsed_resume={"skills": ["Python"]},
+            target_position="Python 后端",
+            difficulty="medium",
+            current_index=0,
+            total_questions=3,
+            used_bank_ids=[],
+            chat_history=[],
+        ):
+            events.append((kind, payload))
+
+        assert [k for k, _ in events] == ["token", "result"]
+        q = events[-1][1]
+        assert q["bank_id"] == 1
+        assert q["question"] == "讲下 Python 的 GIL（微调）"
+        assert q["reference_answer"] == "GIL 是全局解释器锁..."  # 题库补齐
+        assert q["source"] == "from_bank"
+
+    async def test_select_one_sends_slim_candidates_and_used_bank_ids(self, monkeypatch):
+        import json
+
+        from app.services.client.ai_service import ai_service
+
+        captured = {}
+        self._patch_llm_stream(
+            monkeypatch, ['{"index": 0, "question": "Q", "bank_id": 1}'], capture=captured
+        )
+
+        async for _ in ai_service.generate_next_question_stream(
+            candidates=self.CANDIDATES,
+            parsed_resume={},
+            target_position="Python 后端",
+            difficulty="medium",
+            current_index=2,
+            total_questions=3,
+            used_bank_ids=[1],
+            chat_history=[],
+        ):
+            pass
+
+        inp = captured["input"]
+        assert inp["current_index"] == 2
+        assert inp["total_questions"] == 3
+        assert inp["used_bank_ids"] == [1]
+        slim = json.loads(inp["candidates_json"])
+        assert all(set(c) == {"id", "question"} for c in slim)
+
+    async def test_generate_one_when_no_candidates(self, monkeypatch):
+        from app.services.client.ai_service import ai_service
+
+        chunks = [
+            '{"index": 1, "question": "讲下 Redis 缓存穿透", "category": "technical",'
+            ' "reference_answer": "布隆过滤器 + 空值缓存", "source": "ai_fallback"}',
+        ]
+        self._patch_llm_stream(monkeypatch, chunks)
+
+        result = None
+        async for kind, payload in ai_service.generate_next_question_stream(
+            candidates=[], parsed_resume={}, target_position="Python 后端",
+            difficulty="medium", current_index=1, total_questions=3,
+            used_bank_ids=[], chat_history=[],
+        ):
+            if kind == "result":
+                result = payload
+
+        assert result["bank_id"] is None
+        assert result["source"] == "ai_fallback"
+        assert result["question"] == "讲下 Redis 缓存穿透"
+
+    async def test_llm_error_still_yields_result(self, monkeypatch):
+        """astream 中途抛异常 → 仍 yield ("result", ...)，选一分支回退候选首题。"""
+        from unittest.mock import AsyncMock
+
+        from app.services.client import ai_service as mod
+        from app.services.client.ai_service import ai_service
+
+        async def broken_astream(**kwargs):
+            yield type("C", (), {"content": '{"index": 0, "question": "Q", "bank_id": 999}'})()
+            raise RuntimeError("connection error")
+
+        chain = AsyncMock()
+        chain.astream = broken_astream
+        mock_prompt = type("P", (), {"__or__": lambda self, other: chain})()
+        monkeypatch.setattr(mod, "load_prompt", lambda name: mock_prompt)
+        monkeypatch.setattr(mod, "get_chat_llm", lambda **kw: object())
+
+        result = None
+        async for kind, payload in ai_service.generate_next_question_stream(
+            candidates=self.CANDIDATES, parsed_resume={}, target_position="Python 后端",
+            difficulty="medium", current_index=0, total_questions=3,
+            used_bank_ids=[], chat_history=[],
+        ):
+            if kind == "result":
+                result = payload
+
+        assert result is not None
+        assert result["bank_id"] in (1, 2)  # 回退候选首题
+
+    async def test_generate_next_question_wrapper_returns_dict(self, monkeypatch):
+        """非流式包装：累积 token 返回单题 dict。"""
+        from app.services.client.ai_service import ai_service
+
+        self._patch_llm_stream(
+            monkeypatch, ['{"index": 0, "question": "Q1", "bank_id": 1}']
+        )
+        q = await ai_service.generate_next_question(
+            candidates=self.CANDIDATES, parsed_resume={}, target_position="Python 后端",
+            difficulty="medium", current_index=0, total_questions=3,
+            used_bank_ids=[], chat_history=[],
+        )
+        assert q["question"] == "Q1"
+        assert q["bank_id"] == 1

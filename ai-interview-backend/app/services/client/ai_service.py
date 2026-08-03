@@ -366,6 +366,139 @@ class AIService:
 
         return merged[:target_n]
 
+    async def generate_next_question_stream(
+        self,
+        candidates: list,
+        parsed_resume: dict,
+        target_position: str,
+        difficulty: str,
+        current_index: int,
+        total_questions: int,
+        used_bank_ids: list,
+        chat_history: list,
+    ):
+        """逐题实时生成：题库有候选 → 选 1 题；无候选 → AI 兜底生成 1 题（真流式）。
+
+        Yields:
+            ("token", str) 逐 token 增量；
+            最后 ("result", dict) 完整单题。select_one 经 _merge_selected_questions
+            补齐题库参考答案；generate_one 归一化 source/bank_id。
+        """
+        is_intern = any(kw in target_position for kw in ["实习", "intern", "Intern"])
+        intern_hint = "候选人为实习岗位，优先选择基础类、项目类问题。" if is_intern else ""
+
+        difficulty_map = {
+            "easy": "初级，侧重基础知识和简单项目经验",
+            "medium": "中级，涵盖技术深度和项目设计思路",
+            "hard": "高级，深入系统设计、性能优化和技术原理",
+        }
+        difficulty_desc = difficulty_map.get(difficulty, difficulty_map["medium"])
+        position_hint = (
+            "实习岗位，候选人可能是在校学生，请适当降低难度"
+            if is_intern
+            else "正式岗位，请按正常标准出题"
+        )
+        asked_questions = [
+            m.get("content") for m in chat_history if m.get("role") == "interviewer"
+        ]
+
+        if candidates:
+            # 分支 A：题库充分 → 选 1 题（参考答案由 _merge_selected_questions 补齐）
+            slim_candidates = [
+                {"id": c.get("id"), "question": c.get("question")}
+                for c in candidates
+            ]
+            prompt = load_prompt("question_select_one")
+            llm = get_chat_llm(temperature=0.3)
+            chain = prompt | llm
+            chunks: list[str] = []
+            try:
+                async for chunk in chain.astream(input={
+                    "target_position": target_position,
+                    "difficulty": difficulty,
+                    "intern_hint": intern_hint,
+                    "current_index": current_index,
+                    "total_questions": total_questions,
+                    "used_bank_ids": used_bank_ids,
+                    "candidate_count": len(candidates),
+                    "resume_json": json.dumps(parsed_resume, ensure_ascii=False),
+                    "candidates_json": json.dumps(slim_candidates, ensure_ascii=False),
+                }):
+                    text = chunk.content if hasattr(chunk, "content") else str(chunk)
+                    if text:
+                        chunks.append(text)
+                        yield ("token", text)
+            except Exception as e:
+                logger.warning(f"[逐题生成] 选一流式中断，回退候选首题: {e}")
+
+            content = "".join(chunks)
+            result = self._extract_json(content)
+            merged = self._merge_selected_questions([result], candidates, 1)
+            yield ("result", merged[0] if merged else candidates[0])
+        else:
+            # 分支 B：题库空 → 纯 AI 生成 1 题
+            prompt = load_prompt("question_generate_one")
+            llm = get_chat_llm(temperature=0.7)
+            chain = prompt | llm
+            chunks: list[str] = []
+            try:
+                async for chunk in chain.astream(input={
+                    "target_position": target_position,
+                    "difficulty_desc": difficulty_desc,
+                    "position_hint": position_hint,
+                    "current_index": current_index,
+                    "total_questions": total_questions,
+                    "asked_questions": asked_questions,
+                    "resume_json": json.dumps(parsed_resume, ensure_ascii=False),
+                }):
+                    text = chunk.content if hasattr(chunk, "content") else str(chunk)
+                    if text:
+                        chunks.append(text)
+                        yield ("token", text)
+            except Exception as e:
+                logger.warning(f"[逐题生成] 兜底流式中断: {e}")
+
+            content = "".join(chunks)
+            result = self._extract_json(content)
+            result.setdefault("index", current_index)
+            result.setdefault("source", "ai_fallback")
+            result.setdefault("bank_id", None)
+            yield ("result", result)
+
+    async def generate_next_question(
+        self,
+        candidates: list,
+        parsed_resume: dict,
+        target_position: str,
+        difficulty: str,
+        current_index: int,
+        total_questions: int,
+        used_bank_ids: list,
+        chat_history: list,
+    ) -> dict:
+        """非流式包装：累积 token 返回单题 dict（供测试/复用）。
+
+        Returns:
+            单题 dict；生成失败时返回含空 question 的兜底 dict。
+        """
+        result = None
+        async for kind, payload in self.generate_next_question_stream(
+            candidates=candidates,
+            parsed_resume=parsed_resume,
+            target_position=target_position,
+            difficulty=difficulty,
+            current_index=current_index,
+            total_questions=total_questions,
+            used_bank_ids=used_bank_ids,
+            chat_history=chat_history,
+        ):
+            if kind == "result":
+                result = payload
+        return result or {
+            "question": "", "index": current_index,
+            "source": "ai_fallback", "bank_id": None,
+        }
+
     async def generate_with_seeds(
         self,
         seed_questions: list,
