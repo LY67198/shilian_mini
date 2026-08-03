@@ -8,7 +8,7 @@ from datetime import datetime
 class PositionTemplateCreate(BaseModel):
     position_tag: str = Field(..., min_length=1, description="岗位标签，如 python_backend")
     title: str = Field(..., min_length=1, description="岗位展示名")
-    category: Literal["backend", "frontend", "ai", "mobile", "devops"] = Field(...)
+    category: Literal["backend", "frontend", "ai", "mobile", "devops", "custom"] = Field(...)
     level: Literal["intern", "junior", "mid", "senior"] = Field("junior")
     core_skills: Optional[List[str]] = None
     nice_to_have_skills: Optional[List[str]] = None
@@ -24,7 +24,7 @@ class PositionTemplateCreate(BaseModel):
 
 class PositionTemplateUpdate(BaseModel):
     title: Optional[str] = None
-    category: Optional[Literal["backend", "frontend", "ai", "mobile", "devops"]] = None
+    category: Optional[Literal["backend", "frontend", "ai", "mobile", "devops", "custom"]] = None
     level: Optional[Literal["intern", "junior", "mid", "senior"]] = None
     core_skills: Optional[List[str]] = None
     nice_to_have_skills: Optional[List[str]] = None
