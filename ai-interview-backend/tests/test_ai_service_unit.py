@@ -380,3 +380,42 @@ class TestSelectAndAdaptQuestionsStream:
             {"id": 2, "question": "asyncio 事件循环原理"},
             {"id": 3, "question": "RESTful 限流怎么做"},
         ]
+
+
+@pytest.mark.unit
+class TestNextQuestionPrompts:
+    """question_select_one / question_generate_one — 能加载且可渲染（变量齐全）"""
+
+    def test_select_one_loads_and_renders(self):
+        from app.llm.prompts import load_prompt
+        prompt = load_prompt("question_select_one")
+        rendered = prompt.format_prompt(
+            target_position="Python 后端",
+            difficulty="medium",
+            intern_hint="",
+            current_index=0,
+            total_questions=3,
+            used_bank_ids=[1, 2],
+            candidate_count=5,
+            resume_json='{"skills": ["Python"]}',
+            candidates_json='[{"id": 1, "question": "Q"}]',
+        )
+        text = rendered.to_string()
+        assert "第 0/3 题" in text
+        assert "Python 后端" in text
+
+    def test_generate_one_loads_and_renders(self):
+        from app.llm.prompts import load_prompt
+        prompt = load_prompt("question_generate_one")
+        rendered = prompt.format_prompt(
+            target_position="Python 后端",
+            difficulty_desc="中级，涵盖技术深度和项目设计思路",
+            position_hint="正式岗位，请按正常标准出题",
+            current_index=1,
+            total_questions=3,
+            asked_questions=["请做个自我介绍", "讲下你的项目"],
+            resume_json='{"skills": ["Python"]}',
+        )
+        text = rendered.to_string()
+        assert "第 1/3 题" in text
+        assert "不要重复已经问过的题目" in text
