@@ -216,6 +216,7 @@ cd ai-interview-admin && npm install && npm run dev        # 本地 → 3001；�
 4. **部署/生产 DB 大概率缺 embedding 列**（全真链路验证暴露）——上线前必须执行 `alembic upgrade head` + `scripts/rebuild_embeddings.py`（question_bank 84/84 + knowledge_chunks 32/32）
 5. **两个手动 E2E 未做**：出题 SSE（`?stream=true` 需真实 token + 已完成简历）；一键启动前端窗口内 npm 服务（需交互终端跑 `./start.sh` 人工确认）
 6. **【已完成 2026-08-03】任意简历可用——岗位匹配 LLM 兜底**：方案 A 已实施（模板优先 + `MIN_MATCH_SCORE` 阈值 + LLM 合成岗位落库 `category="custom"`，Agent 5 工具链不拆壳）。完成记录见上方"当前状态"。**未做**：非技术简历人工 E2E（需真实 DeepSeek token + 市场营销类简历，验证"AI 定制"标签实际渲染 + 非技术逐题出题）
+7. **简历支持 Word/PPT 格式（.docx/.pptx）——待执行**：spec + plan 已就绪并提交本地 dev（spec `9310148` / plan `503985e`，均为 2026-08-03）。范围：仅现代 OOXML 格式，`app/services/client/resume_extractor.py` 统一分派（magic-byte 校验 + pdfplumber/python-docx/python-pptx），docx 全面提取（段落/表格/页眉页脚/文本框 `w:txbxContent`），pptx 逐页 + 组形状递归（跳过备注），老式 .doc/.ppt 路由层"另存为"提示。**执行方式已定：Subagent-Driven**（plan 10 任务 TDD，新增 12 单测，Task 1 需重建容器装依赖）。入口：`docs/superpowers/plans/2026-08-03-resume-format-support.md`
 
 ### 里程碑（2026-08-02 及之前，详见 `docs/PROJECT_HISTORY.md`）
 
