@@ -15,6 +15,7 @@ from app.exceptions.http_exceptions import NotFoundError, ValidationError
 from app.models.interview import Interview
 from app.models.interview_message import InterviewMessage
 from app.models.resume import Resume
+from app.repositories.interview_repo import interview_repo
 from app.services.backoffice.question_bank_service import question_bank_service
 from app.services.client.ai_service import ai_service
 
@@ -442,6 +443,100 @@ class InterviewService:
         except Exception as e:
             logger.exception("[SSE出题] start_interview_stream 失败")
             yield _sse("error", {"message": str(e) or "面试启动失败"})
+
+    async def generate_next_question_stream(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        interview_id: int,
+    ):
+        """逐题实时生成：确保当前待回答问题存在（缺失则现场生成并落库）。
+
+        岗位匹配入口快建后，前端挂载调本方法生成第 1 题；重复调用返回现有题（幂等）。
+
+        Yields:
+            _sse 字符串：status → question_chunk* → done{index, question}；失败时 error。
+        """
+        from app.workflows._shared.sse import _sse
+
+        try:
+            interview = await interview_repo.get_by_id_for_user(db, interview_id, user_id)
+            if not interview:
+                raise NotFoundError(message="面试记录不存在")
+            if interview.status != "in_progress":
+                raise ValidationError(message="面试已结束")
+            if not interview.total_questions:
+                raise ValidationError(message="面试题数未设置")
+
+            questions = interview.questions_data or []
+            target_index = interview.current_question_index
+
+            # 幂等：该索引已有题 → 直接返回现有题（重复调用防重）
+            if target_index < len(questions):
+                existing = questions[target_index]
+                yield _sse("done", {"index": target_index, "question": existing["question"]})
+                return
+            if target_index >= interview.total_questions:
+                raise ValidationError(message="面试题目已生成完毕")
+
+            resume = await db.get(Resume, interview.resume_id)
+            try:
+                parsed_resume = json.loads(resume.parsed_content) if resume and resume.parsed_content else {}
+            except json.JSONDecodeError:
+                parsed_resume = {}
+
+            yield _sse("status", {"message": "正在检索题库..."})
+
+            candidates = await self._prepare_questions(
+                db=db,
+                parsed_resume=parsed_resume,
+                target_position=interview.target_position,
+                difficulty=interview.difficulty or "medium",
+                total_questions=interview.total_questions,
+            )
+            used_bank_ids = [q.get("bank_id") for q in questions if q.get("bank_id")]
+            messages = await interview_repo.list_messages(db, interview_id)
+            chat_history = [{"role": m.role, "content": m.content} for m in messages]
+
+            question = None
+            async for kind, payload in ai_service.generate_next_question_stream(
+                candidates=candidates,
+                parsed_resume=parsed_resume,
+                target_position=interview.target_position or "",
+                difficulty=interview.difficulty or "medium",
+                current_index=target_index,
+                total_questions=interview.total_questions,
+                used_bank_ids=used_bank_ids,
+                chat_history=chat_history,
+            ):
+                if kind == "token":
+                    yield _sse("question_chunk", {"content": payload})
+                else:
+                    question = payload
+
+            if question is None:
+                question = {"question": "", "index": target_index, "source": "ai_fallback", "bank_id": None}
+            if not question.get("question"):
+                raise ValidationError(message="题目生成失败，请重试")
+
+            question["index"] = target_index
+            questions = list(interview.questions_data or [])
+            questions.append(question)
+            interview.questions_data = questions
+            interview.current_question_index = target_index
+            await interview_repo.create_message(
+                db, interview_id, role="interviewer",
+                content=question["question"], question_index=target_index,
+            )
+            bank_ids = [question["bank_id"]] if question.get("bank_id") else []
+            if bank_ids:
+                await question_bank_service.increment_use_count(db, bank_ids)
+            await db.commit()
+
+            yield _sse("done", {"index": target_index, "question": question["question"]})
+        except Exception as e:
+            logger.exception("[逐题生成] generate_next_question_stream 失败")
+            yield _sse("error", {"message": str(e) or "题目生成失败"})
 
     async def get_report(
         self,

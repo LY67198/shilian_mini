@@ -257,3 +257,118 @@ class TestStartInterviewFastCreate:
         assert messages[0].role == "interviewer"
         assert messages[0].content == "Q0"
         assert messages[0].question_index == 0
+
+
+@pytest.mark.unit
+class TestGenerateNextQuestionStreamSse:
+    """interview_service.generate_next_question_stream — status → question_chunk* → done"""
+
+    @staticmethod
+    def _make_context(**overrides):
+        from types import SimpleNamespace
+
+        interview = SimpleNamespace(
+            resume_id=1,
+            target_position="Python 后端",
+            difficulty="medium",
+            total_questions=3,
+            current_question_index=0,
+            questions_data=[],
+            status="in_progress",
+        )
+        resume = SimpleNamespace(parsed_content='{"skills": ["Python"]}')
+
+        db = AsyncMock()
+        db.get = AsyncMock(return_value=resume)
+
+        repo = AsyncMock()
+        repo.get_by_id_for_user.return_value = interview
+        repo.list_messages.return_value = []
+        repo.create_message.return_value = None
+        return db, repo, interview
+
+    async def test_streams_question_chunk_then_done(self, monkeypatch):
+        from types import SimpleNamespace
+
+        candidates = [
+            {
+                "id": 1, "question": "讲下 Python 的 GIL",
+                "reference_answer": "GIL 是全局解释器锁...", "key_points": ["GIL"],
+                "difficulty": "medium", "position_tag": "python_backend",
+                "similarity": 0.9, "source": "from_bank",
+            }
+        ]
+
+        async def fake_prepare(self, **kwargs):
+            return candidates
+
+        async def fake_gen(**kwargs):
+            yield ("token", '{"index": 0, "question": "讲下 Python 的 GIL（微调）", "bank_id": 1')
+            yield ("result", {
+                "question": "讲下 Python 的 GIL（微调）", "bank_id": 1,
+                "reference_answer": "GIL 是全局解释器锁...", "source": "from_bank",
+            })
+
+        from app.repositories.interview_repo import interview_repo as repo_orig
+        from app.services.client.ai_service import ai_service
+
+        monkeypatch.setattr(mod.InterviewService, "_prepare_questions", fake_prepare)
+        monkeypatch.setattr(ai_service, "generate_next_question_stream", fake_gen)
+        monkeypatch.setattr(mod, "interview_repo", repo_orig)
+        monkeypatch.setattr(repo_orig, "get_by_id_for_user", AsyncMock(return_value=SimpleNamespace(
+            resume_id=1, target_position="Python 后端", difficulty="medium",
+            total_questions=3, current_question_index=0, questions_data=[],
+            status="in_progress",
+        )))
+        monkeypatch.setattr(repo_orig, "list_messages", AsyncMock(return_value=[]))
+
+        svc = mod.InterviewService()
+        db = AsyncMock()
+        db.get = AsyncMock(return_value=SimpleNamespace(parsed_content='{"skills": ["Python"]}'))
+        # 真实 create_message 里 db.add(msg) 是同步调用，AsyncMock 会返回未 await 的协程 → 置为普通函数
+        db.add = lambda obj: None
+        sse_events = [s async for s in svc.generate_next_question_stream(
+            db=db, user_id=1, interview_id=1,
+        )]
+        parsed = _parse_sse_blocks(sse_events)
+
+        assert [e for e, _ in parsed] == ["status", "question_chunk", "done"]
+        assert parsed[1][1]["content"].startswith('{"index": 0')
+        assert parsed[2][1]["index"] == 0
+        assert parsed[2][1]["question"] == "讲下 Python 的 GIL（微调）"
+
+    async def test_idempotent_returns_existing_question(self, monkeypatch):
+        from types import SimpleNamespace
+
+        interview = SimpleNamespace(
+            resume_id=1, target_position="Python 后端", difficulty="medium",
+            total_questions=3, current_question_index=0,
+            questions_data=[{"question": "已有题", "bank_id": 1}], status="in_progress",
+        )
+        db = AsyncMock()
+        repo = AsyncMock()
+        repo.get_by_id_for_user.return_value = interview
+        monkeypatch.setattr(mod, "interview_repo", repo)
+
+        svc = mod.InterviewService()
+        sse_events = [s async for s in svc.generate_next_question_stream(
+            db=db, user_id=1, interview_id=1,
+        )]
+        parsed = _parse_sse_blocks(sse_events)
+
+        assert [e for e, _ in parsed] == ["done"]
+        assert parsed[0][1] == {"index": 0, "question": "已有题"}
+
+    async def test_not_owned_yields_error(self, monkeypatch):
+        repo = AsyncMock()
+        repo.get_by_id_for_user.return_value = None
+        monkeypatch.setattr(mod, "interview_repo", repo)
+
+        svc = mod.InterviewService()
+        sse_events = [s async for s in svc.generate_next_question_stream(
+            db=AsyncMock(), user_id=1, interview_id=1,
+        )]
+        parsed = _parse_sse_blocks(sse_events)
+
+        assert [e for e, _ in parsed] == ["error"]
+        assert "面试记录不存在" in parsed[0][1]["message"]
