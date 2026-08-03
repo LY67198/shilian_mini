@@ -95,3 +95,35 @@ class TestDocxExtraction:
         assert text.count("TextBoxLine") == 1
         # 文本框内容排在最后（页眉页脚之后）
         assert text.index("TextBoxLine") > text.index("A2 | B2")
+
+
+@pytest.mark.unit
+class TestPptxExtraction:
+    def _build_pptx(self, path):
+        from pptx import Presentation
+        from pptx.util import Inches
+        prs = Presentation()
+        # 页 1：标题文本
+        s1 = prs.slides.add_slide(prs.slide_layouts[1])
+        s1.shapes.title.text = "Page1Title"
+        # 页 2：表格 + 组形状嵌套文本
+        s2 = prs.slides.add_slide(prs.slide_layouts[1])
+        tbl = s2.shapes.add_table(
+            rows=1, cols=2, left=Inches(1), top=Inches(1),
+            width=Inches(4), height=Inches(1),
+        )
+        tbl.table.cell(0, 0).text = "A1"
+        tbl.table.cell(0, 1).text = "B1"
+        group = s2.shapes.add_group_shape()
+        tb = group.shapes.add_textbox(Inches(1), Inches(2), Inches(3), Inches(1))
+        tb.text_frame.text = "NestedText"
+        prs.save(str(path))
+
+    def test_multi_slide_table_group(self, tmp_path):
+        p = tmp_path / "r.pptx"
+        self._build_pptx(p)
+        text = extract_resume_text(str(p), "r.pptx")
+        assert "Page1Title" in text
+        assert "A1 | B1" in text
+        assert "NestedText" in text
+        assert text.index("Page1Title") < text.index("A1 | B1")

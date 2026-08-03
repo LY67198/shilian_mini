@@ -106,4 +106,33 @@ def _extract_docx_text(file_path: str) -> str:
 
 
 def _extract_pptx_text(file_path: str) -> str:
-    return ""
+    """逐页提取 pptx：文本框架 + 表格，组形状递归下钻；跳过备注。"""
+    from pptx import Presentation
+
+    prs = Presentation(file_path)
+    pages: list[str] = []
+    for slide in prs.slides:
+        lines: list[str] = []
+        _collect_slide_text(slide.shapes, lines)
+        if lines:
+            pages.append("\n".join(lines))
+    return "\n\n".join(pages)
+
+
+def _collect_slide_text(shapes, lines: list[str]) -> None:
+    """递归收集一页内所有文本（含组形状嵌套）。"""
+    for shape in shapes:
+        if getattr(shape, "shapes", None):  # 组形状
+            _collect_slide_text(shape.shapes, lines)
+            continue
+        if getattr(shape, "has_text_frame", False):
+            for para in shape.text_frame.paragraphs:
+                text = "".join(run.text for run in para.runs).strip()
+                if text:
+                    lines.append(text)
+        if getattr(shape, "has_table", False):
+            for row in shape.table.rows:
+                cells = [c.text.strip() for c in row.cells]
+                cells = [c for c in cells if c]
+                if cells:
+                    lines.append(" | ".join(cells))
