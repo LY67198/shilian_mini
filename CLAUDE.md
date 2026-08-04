@@ -189,7 +189,10 @@ cd ai-interview-admin && npm install && npm run dev        # 本地 → 3001；�
 
 ## 当前状态
 
-**2026-08-03（最新）**：项目完整可运行。`pytest -m "unit"` 全绿（142 passed），前端/管理端 build 通过。最新完成：
+**2026-08-04（最新）**：项目完整可运行。`pytest -m "unit"` 全绿（155 passed，原 142 + 新增 13），前端/管理端 build 通过。最新完成：
+- **简历支持 Word/PPT 格式（.docx/.pptx）**（2026-08-04）：新增 `app/services/client/resume_extractor.py` 统一提取——`validate_resume_ext()` 两档后缀校验（`.doc/.ppt` 提示另存为）+ `extract_resume_text()` 按 magic-byte 分派 pdfplumber / python-docx / python-pptx。docx 全面提取（段落/表格/页眉页脚/文本框 `w:txbxContent`）；pptx 逐页提取（文本框架/表格/组形状递归，软换行 `a:br` 保留为换行，跳过备注）；空文本统一报错 `ValidationError("无法从文件中提取文本内容")`。`resume_service.py` 接入 extractor 并删除 `_extract_pdf_text`；路由层两档校验（`.doc/.ppt` 提示另存为）；前端上传页支持 PDF/Word/PPT 三格式 + 拒绝不支持格式时提示另存为。新增依赖 `python-pptx==1.0.2`（python-docx 已在）。验证：`pytest -m "unit"` 155 passed、前端/管理端 build 通过。spec：`docs/superpowers/specs/2026-08-03-resume-format-support-design.md`；计划：`docs/superpowers/plans/2026-08-03-resume-format-support.md`（10 任务 TDD 全落地，13 commit）
+
+**2026-08-03**：项目完整可运行。`pytest -m "unit"` 全绿（142 passed），前端/管理端 build 通过。最新完成：
 - **任意简历可用——岗位匹配 LLM 兜底**（2026-08-03）：`match_positions` 加 `MIN_MATCH_SCORE`（0.25）阈值，最佳分低于阈值时不再硬塞 IT 模板，改由 `ai_service.synthesize_positions` LLM 从画像合成 1-3 个岗位并落库为 `category="custom"` 模板行（sha1 幂等 tag，ValueError/IntegrityError 竞态兜底，custom 行不参与后续匹配）；画像 prompt `position_hints` 放宽为自由填写；6 个出题/评分 prompt 去技术向措辞；backoffice category 枚举扩 `custom`；Agent 输出 schema 补 `category`，前端 PositionMatch 对 custom 岗位显示"AI 定制"标签、上传页加"不确定做什么？试试 AI 岗位匹配"入口。验证：`pytest -m "unit"` 142 passed、前端/管理端 build 通过。spec：`docs/superpowers/specs/2026-08-03-arbitrary-resume-fallback-design.md`；计划：`docs/superpowers/plans/2026-08-03-arbitrary-resume-fallback.md`（9 任务 TDD 全落地，11 commit）
 - **出题/反馈"非流式"根因修复**（2026-08-03）：定位为 `get_chat_llm()` 默认 `streaming=False`——`langchain-openai` 的 `ChatOpenAI(streaming=False)` 会把 `.astream()` 响应**缓冲成单块一次性 yield**（底层虽是 stream=true 请求）。容器内实测：False→1 chunk/9.7s，True→121 chunk/2.5s。修复：5 处流式调用点补 `streaming=True`（`evaluate.py` / `generate_report.py` / `ai_service.py` 的 `select_and_adapt_questions_stream` + `generate_next_question_stream` 两分支）。验证：真实路径产出 176 token chunk；`pytest -m "unit"` 115 passed；uvicorn StatReload 自动重启，**dev 环境无需重建镜像**（bind mount + reload）。教训：**任何新增 `.astream()` 链路必须传 `streaming=True`**
 - **面试中逐题实时生成**（2026-08-03）：岗位匹配入口快建（`generate_questions=False`）→
@@ -216,7 +219,7 @@ cd ai-interview-admin && npm install && npm run dev        # 本地 → 3001；�
 4. **部署/生产 DB 大概率缺 embedding 列**（全真链路验证暴露）——上线前必须执行 `alembic upgrade head` + `scripts/rebuild_embeddings.py`（question_bank 84/84 + knowledge_chunks 32/32）
 5. **两个手动 E2E 未做**：出题 SSE（`?stream=true` 需真实 token + 已完成简历）；一键启动前端窗口内 npm 服务（需交互终端跑 `./start.sh` 人工确认）
 6. **【已完成 2026-08-03】任意简历可用——岗位匹配 LLM 兜底**：方案 A 已实施（模板优先 + `MIN_MATCH_SCORE` 阈值 + LLM 合成岗位落库 `category="custom"`，Agent 5 工具链不拆壳）。完成记录见上方"当前状态"。**未做**：非技术简历人工 E2E（需真实 DeepSeek token + 市场营销类简历，验证"AI 定制"标签实际渲染 + 非技术逐题出题）
-7. **简历支持 Word/PPT 格式（.docx/.pptx）——待执行**：spec + plan 已就绪并提交本地 dev（spec `9310148` / plan `503985e`，均为 2026-08-03）。范围：仅现代 OOXML 格式，`app/services/client/resume_extractor.py` 统一分派（magic-byte 校验 + pdfplumber/python-docx/python-pptx），docx 全面提取（段落/表格/页眉页脚/文本框 `w:txbxContent`），pptx 逐页 + 组形状递归（跳过备注），老式 .doc/.ppt 路由层"另存为"提示。**执行方式已定：Subagent-Driven**（plan 10 任务 TDD，新增 12 单测，Task 1 需重建容器装依赖）。入口：`docs/superpowers/plans/2026-08-03-resume-format-support.md`
+7. **【已完成 2026-08-04】简历支持 Word/PPT 格式（.docx/.pptx）**：方案已实施（`app/services/client/resume_extractor.py` 统一分派：magic-byte 校验 + pdfplumber/python-docx/python-pptx；docx 段落/表格/页眉页脚/文本框；pptx 逐页 + 组形状递归 + 软换行；空文本统一报错；路由层两档校验；前端三格式 + 另存为提示）。完成记录见上方"当前状态"。**未做**：真实 .docx/.pptx 简历人工 E2E（需真实文件验证前端上传页三格式实际提取）
 
 ### 里程碑（2026-08-02 及之前，详见 `docs/PROJECT_HISTORY.md`）
 
