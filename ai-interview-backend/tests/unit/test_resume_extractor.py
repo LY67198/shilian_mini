@@ -135,3 +135,23 @@ class TestPptxExtraction:
         assert "A1 | B1" in text
         assert "NestedText" in text
         assert text.index("Page1Title") < text.index("A1 | B1")
+
+    def test_soft_line_break_preserved(self, tmp_path):
+        """Shift+Enter 软换行（a:br）必须保留为换行，不得被 run 拼接吞并。"""
+        from pptx import Presentation
+        from pptx.util import Inches
+        from pptx.oxml.ns import qn
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank layout
+        tb = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
+        p = tb.text_frame.paragraphs[0]
+        run1 = p.add_run(); run1.text = "PhoneLine"
+        # 在 run1 之后插入软换行 a:br
+        br = run1._r.makeelement(qn("a:br"), {})
+        run1._r.addnext(br)
+        run2 = p.add_run(); run2.text = "EmailLine"
+        path = tmp_path / "br.pptx"
+        prs.save(str(path))
+        text = extract_resume_text(str(path), "br.pptx")
+        assert "PhoneLine" in text and "EmailLine" in text
+        assert "PhoneLineEmailLine" not in text  # 软换行未被吞并

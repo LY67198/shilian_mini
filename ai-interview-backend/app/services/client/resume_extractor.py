@@ -130,7 +130,9 @@ def _collect_slide_text(shapes, lines: list[str]) -> None:
             continue
         if getattr(shape, "has_text_frame", False):
             for para in shape.text_frame.paragraphs:
-                text = "".join(run.text for run in para.runs).strip()
+                # para.text 包含 a:br（软换行）与 a:fld（域），a:br 在 python-pptx
+                # 中表示为 \v（垂直制表符），转成 \n 以免电话号码/邮箱等被吞并
+                text = para.text.replace("\v", "\n").strip()
                 if text:
                     lines.append(text)
         if getattr(shape, "has_table", False):
