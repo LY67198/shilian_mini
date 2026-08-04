@@ -6,10 +6,10 @@
       <!-- Step 1: 上传简历 -->
       <div v-if="step === 1">
         <div class="form-group">
-          <label>上传简历 (PDF)</label>
+          <label>上传简历 (PDF / Word / PPT)</label>
           <div class="upload-area" @click="$refs.fileInput.click()" @dragover.prevent @drop.prevent="onDrop">
-            <input ref="fileInput" type="file" accept=".pdf" @change="onFileChange" hidden />
-            <p v-if="!file" style="color:#6b7280">点击或拖拽上传 PDF 简历</p>
+            <input ref="fileInput" type="file" accept=".pdf,.docx,.pptx" @change="onFileChange" hidden />
+            <p v-if="!file" style="color:#6b7280">点击或拖拽上传简历（PDF / Word / PPT，10MB 以内）</p>
             <p v-else>📎 {{ file.name }}</p>
           </div>
         </div>
@@ -161,6 +161,7 @@ const totalQuestions = ref(5)
 const uploading = ref(false)
 const starting = ref(false)
 const error = ref('')
+const SUPPORTED_EXTS = ['.pdf', '.docx', '.pptx']
 const resumeId = ref(null)
 const parsedContent = ref(null)
 const analysis = ref(null)
@@ -235,10 +236,13 @@ onUnmounted(() => {
   stopStartingAnimation()
 })
 
-function onFileChange(e) { file.value = e.target.files[0] }
+function onFileChange(e) {
+  const f = e.target.files[0]
+  if (f && SUPPORTED_EXTS.some(ext => f.name.toLowerCase().endsWith(ext))) file.value = f
+}
 function onDrop(e) {
   const f = e.dataTransfer.files[0]
-  if (f && f.name.endsWith('.pdf')) file.value = f
+  if (f && SUPPORTED_EXTS.some(ext => f.name.toLowerCase().endsWith(ext))) file.value = f
 }
 
 async function handleUpload() {
