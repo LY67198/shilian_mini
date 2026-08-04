@@ -189,7 +189,9 @@ cd ai-interview-admin && npm install && npm run dev        # 本地 → 3001；�
 
 ## 当前状态
 
-**2026-08-04（最新）**：项目完整可运行。`pytest -m "unit"` 全绿（155 passed，原 142 + 新增 13），前端/管理端 build 通过。最新完成：
+**2026-08-04（最新）**：项目完整可运行。`pytest -m "unit"` 全绿（158 passed，原 142 + 新增 16），前端/管理端 build 通过。最新完成：
+- **非 IT 岗位（医学等）面试出题错位修复**（2026-08-04）：医学简历经 LLM 合成 custom 岗位后，`_prepare_questions` 的"放松回退"（BM25→RRF→rerank）仍从题库捞回 IT 题（rerank 相关性≈0.006），导致医学面试出计算机题。修复：新增 `QUESTION_BANK_RERANK_MIN_SCORE=0.05` 配置，`_prepare_questions` 在 rerank 之后按此阈值过滤最终候选，低相关候选剔除 → 调用方走纯 AI 生成兜底（Branch B，岗位无关 prompt）。验证：医学简历→0 候选走纯 AI，IT 简历→14 候选不受影响；容器内 rerank 实测合法 IT 匹配 0.12–0.32 vs 医疗/IT 不匹配 0.006。新增单测 `tests/unit/test_prepare_questions_threshold.py`（3 用例，mock pipeline + BM25 truthy）。该阈值过滤在 `_prepare_questions` 层，`start_interview` / `start_interview_stream` / `generate_next_question_stream` 全链路共享
+- **岗位匹配页简历列表不刷新修复**（2026-08-04）：上传新简历后进岗位匹配页，简历列表是 mount 时快照、无刷新机制，最新简历"列表里完全没有"。修复：`PositionMatch.vue` 加"🔄 刷新简历"按钮 + `visibilitychange`/`window focus` 事件自动重新拉取，刷新后保留原选择（原简历仍在则保留，否则默认选第一份 completed）。后端 `getResumes` 本就返回最新，纯前端快照问题
 - **简历支持 Word/PPT 格式（.docx/.pptx）**（2026-08-04）：新增 `app/services/client/resume_extractor.py` 统一提取——`validate_resume_ext()` 两档后缀校验（`.doc/.ppt` 提示另存为）+ `extract_resume_text()` 按 magic-byte 分派 pdfplumber / python-docx / python-pptx。docx 全面提取（段落/表格/页眉页脚/文本框 `w:txbxContent`）；pptx 逐页提取（文本框架/表格/组形状递归，软换行 `a:br` 保留为换行，跳过备注）；空文本统一报错 `ValidationError("无法从文件中提取文本内容")`。`resume_service.py` 接入 extractor 并删除 `_extract_pdf_text`；路由层两档校验（`.doc/.ppt` 提示另存为）；前端上传页支持 PDF/Word/PPT 三格式 + 拒绝不支持格式时提示另存为。新增依赖 `python-pptx==1.0.2`（python-docx 已在）。验证：`pytest -m "unit"` 155 passed、前端/管理端 build 通过。spec：`docs/superpowers/specs/2026-08-03-resume-format-support-design.md`；计划：`docs/superpowers/plans/2026-08-03-resume-format-support.md`（10 任务 TDD 全落地，13 commit）
 
 **2026-08-03**：项目完整可运行。`pytest -m "unit"` 全绿（142 passed），前端/管理端 build 通过。最新完成：
