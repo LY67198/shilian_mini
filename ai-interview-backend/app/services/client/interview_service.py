@@ -148,6 +148,14 @@ class InterviewService:
             logger.error(f"[RAG出题] Hybrid retrieval failed, falling back to pure AI: {e}")
             candidates = []
 
+        # 最终候选按相关性阈值过滤：题库未覆盖的岗位（如医学等非 IT custom 岗位）
+        # 放松回退仍会捞回不相关题（rerank 相关性≈0），在此剔除后调用方走纯 AI 生成兜底，
+        # 避免医学岗位面试出计算机题。
+        candidates = [
+            c for c in candidates
+            if c["similarity"] >= settings.QUESTION_BANK_RERANK_MIN_SCORE
+        ]
+
         return candidates
 
     async def _generate_questions_with_rag(

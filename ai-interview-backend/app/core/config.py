@@ -126,6 +126,11 @@ class Settings(BaseSettings):
 
     # 题库召回参数（用于面试出题，核心）
     QUESTION_BANK_MIN_SCORE: float = 0.7
+    # 题库无对应岗位时（如医学等非 IT 简历合成出的 custom 岗位），
+    # RAG 放松回退仍会从题库捞回不相关题（rerank 相关性接近 0）。
+    # 该阈值在 rerank 之后再次过滤最终候选，低于此相关度的题视为无效候选，
+    # 触发纯 AI 生成兜底（Branch B），避免医学面试出计算机题。
+    QUESTION_BANK_RERANK_MIN_SCORE: float = 0.05
     QUESTION_BANK_RECALL_FACTOR: int = 2
     QUESTION_BANK_TOP_K: int = 20
 
