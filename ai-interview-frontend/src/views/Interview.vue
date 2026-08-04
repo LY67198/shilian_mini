@@ -60,26 +60,7 @@
         </div>
       </div>
 
-      <!-- 流式题目输出（逐字显示现场生成的题） -->
-      <div v-if="streamingQuestion" class="message interviewer">
-        <div class="avatar-col">
-          <svg viewBox="0 0 40 40" width="36" height="36" class="ai-avatar thinking">
-            <circle cx="20" cy="20" r="19" fill="white" stroke="#4f46e5" stroke-width="1.5"/>
-            <ellipse cx="14" cy="17" rx="2.5" ry="3" fill="#1e1e1e">
-              <animate attributeName="ry" values="3;1;3" dur="1.5s" repeatCount="indefinite"/>
-            </ellipse>
-            <ellipse cx="26" cy="17" rx="2.5" ry="3" fill="#1e1e1e">
-              <animate attributeName="ry" values="3;1;3" dur="1.5s" repeatCount="indefinite"/>
-            </ellipse>
-          </svg>
-        </div>
-        <div class="bubble">
-          <div class="bubble-content streaming-content" v-html="renderContent(streamingQuestion)"></div>
-          <span class="cursor-blink">▊</span>
-        </div>
-      </div>
-
-      <!-- 流式输出 -->
+      <!-- 流式输出（评分反馈逐字显示，位于题目上方） -->
       <div v-if="streamingText" class="message interviewer">
         <div class="avatar-col">
           <svg viewBox="0 0 40 40" width="36" height="36" class="ai-avatar thinking">
@@ -94,6 +75,25 @@
         </div>
         <div class="bubble">
           <div class="bubble-content streaming-content" v-html="renderContent(streamingText)"></div>
+          <span class="cursor-blink">▊</span>
+        </div>
+      </div>
+
+      <!-- 流式题目输出（逐字显示现场生成的题，位于评分下方） -->
+      <div v-if="streamingQuestion" class="message interviewer">
+        <div class="avatar-col">
+          <svg viewBox="0 0 40 40" width="36" height="36" class="ai-avatar thinking">
+            <circle cx="20" cy="20" r="19" fill="white" stroke="#4f46e5" stroke-width="1.5"/>
+            <ellipse cx="14" cy="17" rx="2.5" ry="3" fill="#1e1e1e">
+              <animate attributeName="ry" values="3;1;3" dur="1.5s" repeatCount="indefinite"/>
+            </ellipse>
+            <ellipse cx="26" cy="17" rx="2.5" ry="3" fill="#1e1e1e">
+              <animate attributeName="ry" values="3;1;3" dur="1.5s" repeatCount="indefinite"/>
+            </ellipse>
+          </svg>
+        </div>
+        <div class="bubble">
+          <div class="bubble-content streaming-content" v-html="renderContent(streamingQuestion)"></div>
           <span class="cursor-blink">▊</span>
         </div>
       </div>
@@ -306,6 +306,9 @@ async function handleSubmit() {
         scrollToBottom()
       },
       (text) => {   // onQuestionChunk：下一题逐字显示
+        // 评分反馈已定格（done 时 push 进 messages），出题开始时隐藏流式评分气泡，
+        // 避免题目气泡与评分气泡并存导致"题目在上、评分在下"的视觉错位
+        streamingText.value = ''
         streamingQuestion.value = text
         scrollToBottom()
       },
