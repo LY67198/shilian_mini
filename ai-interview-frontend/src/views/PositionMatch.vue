@@ -10,7 +10,12 @@
       <h2>开始匹配</h2>
 
       <div class="form-item">
-        <label>选择简历 *</label>
+        <div class="resume-label-row">
+          <label>选择简历 *</label>
+          <button class="btn-refresh" @click="loadResumes(true)" :disabled="loadingResumes">
+            {{ loadingResumes ? '刷新中...' : '🔄 刷新简历' }}
+          </button>
+        </div>
         <div v-if="loadingResumes" class="hint">加载简历中...</div>
         <div v-else-if="!resumes.length" class="empty-resume">
           还没有简历，
@@ -198,7 +203,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getResumes } from '../api/resume'
 import { matchPositions, startInterviewFromAgent } from '../api/positionAgent'
@@ -229,18 +234,37 @@ function difficultyLabel(d) {
   return { easy: '简单', medium: '中等', hard: '困难' }[d] || d
 }
 
-onMounted(async () => {
+async function loadResumes(keepSelection = false) {
+  loadingResumes.value = true
+  const prevSelected = selectedResumeId.value
   try {
     const data = await getResumes()
     resumes.value = data.items || data || []
-    // 默认选第一份已完成的简历
-    const first = resumes.value.find(r => r.status === 'completed')
-    if (first) selectedResumeId.value = getResumeId(first)
+    // 刷新后保留原选择（若该简历仍在列表中）；否则默认选第一份已完成的简历
+    const stillExists = keepSelection && resumes.value.some(r => getResumeId(r) === prevSelected)
+    if (!stillExists) {
+      const first = resumes.value.find(r => r.status === 'completed')
+      if (first) selectedResumeId.value = getResumeId(first)
+    }
   } catch (e) {
     console.error(e)
   } finally {
     loadingResumes.value = false
   }
+}
+
+onMounted(() => {
+  loadResumes()
+  // 页面重新可见 / 获得焦点时刷新简历列表（例如在另一标签页上传新简历后切回本页）
+  const onVisible = () => {
+    if (!document.hidden) loadResumes(true)
+  }
+  document.addEventListener('visibilitychange', onVisible)
+  window.addEventListener('focus', onVisible)
+  onUnmounted(() => {
+    document.removeEventListener('visibilitychange', onVisible)
+    window.removeEventListener('focus', onVisible)
+  })
 })
 
 async function runMatch() {
@@ -302,6 +326,10 @@ async function startInterview(positionTag) {
 
 .form-item { margin-bottom: 18px; }
 .form-item label { display: block; font-size: 13px; color: #374151; margin-bottom: 8px; font-weight: 500; }
+.resume-label-row { display: flex; align-items: center; justify-content: space-between; }
+.btn-refresh { font-size: 12px; color: #4f46e5; background: none; border: 1px solid #4f46e5; border-radius: 6px; padding: 3px 10px; cursor: pointer; margin-bottom: 8px; }
+.btn-refresh:hover:not(:disabled) { background: #eef2ff; }
+.btn-refresh:disabled { color: #a5b4fc; border-color: #c7d2fe; cursor: not-allowed; }
 .form-item input { width: 100%; padding: 10px 14px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; }
 .form-item input:focus { border-color: #4f46e5; outline: none; }
 
