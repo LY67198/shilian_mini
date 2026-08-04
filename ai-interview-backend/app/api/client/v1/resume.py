@@ -1,4 +1,4 @@
-"""客户端简历 API — 上传 PDF 并触发 AI 解析 / 列表 / 详情 / 删除"""
+"""客户端简历 API — 上传简历（PDF / Word / PPT）并触发 AI 解析 / 列表 / 详情 / 删除"""
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,6 +6,7 @@ from app.db.session import get_db
 from app.api.client.deps import get_current_user
 from app.deps import get_resume_service
 from app.services.client.resume_service import ResumeService
+from app.services.client.resume_extractor import validate_resume_ext
 from app.schemas.response import ApiResponse
 from app.models.user import User
 from app.exceptions.http_exceptions import ValidationError
@@ -21,10 +22,9 @@ async def upload_resume(
     db: AsyncSession = Depends(get_db),
     resume_service: ResumeService = Depends(get_resume_service),
 ):
-    """上传简历 PDF 并触发 AI 解析"""
-    # 验证文件类型
-    if not file.filename.lower().endswith(".pdf"):
-        raise ValidationError(message="仅支持 PDF 格式文件")
+    """上传简历（PDF / Word / PPT）并触发 AI 解析"""
+    # 验证文件类型（两档提示：.doc/.ppt 另存为；其他不支持格式）
+    validate_resume_ext(file.filename)
 
     # 验证文件大小（最大 10MB）
     content = await file.read()
