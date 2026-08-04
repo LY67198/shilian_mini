@@ -250,6 +250,14 @@ export async function submitAnswerStream(interviewId, answer, onChunk, onDone, o
   let scoreData = null
   let nextQuestionData = null
 
+  // 兜底超时：上游 LLM 偶发挂起（DeepSeek 200 后 body 永久不发）时 SSE 无任何事件，
+  // 180s 内未收到 done 则 abort 并抛明确错误，避免前端永久"思考中"
+  let streamTimedOut = false
+  const overallTimer = setTimeout(() => {
+    streamTimedOut = true
+    controller.abort()
+  }, 180000)
+
   try {
     while (true) {
       const { done, value } = await reader.read()
@@ -304,7 +312,13 @@ export async function submitAnswerStream(interviewId, answer, onChunk, onDone, o
         }
       }
     }
+  } catch (e) {
+    if (e.name === 'AbortError' && streamTimedOut) {
+      throw new Error('面试响应超时，AI 暂无响应，请刷新后重试')
+    }
+    if (e.message !== 'Unexpected end of JSON input') throw e
   } finally {
+    clearTimeout(overallTimer)
     try { reader.releaseLock() } catch (_) {}
   }
 }

@@ -1,9 +1,12 @@
 """retrieval_check while-loop service unit tests"""
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.retrieval import SearchResult
+from app.workflows.retrieval_check import service as service_mod
 from app.workflows.retrieval_check.service import (
     RetrievalCheckService,
     _format_context,
@@ -47,6 +50,35 @@ class TestSelfCheckRetrieve:
         monkeypatch.setattr(
             "app.workflows.retrieval_check.service._check_sufficiency", fake_check
         )
+
+        service = RetrievalCheckService(pipeline=MockPipeline(), max_retries=2)
+        result = await service.check_and_retrieve("python GIL")
+
+        assert result.final_context == ["relevant"]
+        assert result.debug_info["total_retrieval_rounds"] == 1
+        assert result.debug_info["retry_count"] == 0
+
+    async def test_check_llm_hang_times_out_falls_back(self, monkeypatch):
+        """check LLM 挂起（DeepSeek 200 后 body 永久不发）→ wait_for 超时 → fallback 1 轮结束。
+
+        回归：此前无 wait_for，httpx read timeout 对上游挂起不触发，check_and_retrieve 永久挂起，
+        整个 SSE 面试流无输出、前端"一直思考"。超时后走 (True,'ok') 不阻断。
+        """
+        class MockPipeline:
+            async def search(self, query, filters=None):
+                return [SearchResult(id=1, content="relevant", score=0.9, source="both")]
+
+        class HangingChain:
+            async def ainvoke(self, **kwargs):
+                await asyncio.Event().wait()  # 永不返回
+
+        class FakePrompt:
+            def __or__(self, other):
+                return HangingChain()
+
+        monkeypatch.setattr(service_mod, "_LLM_CALL_TIMEOUT_SECONDS", 0.1)
+        monkeypatch.setattr(service_mod, "load_prompt", lambda name: FakePrompt())
+        monkeypatch.setattr(service_mod, "get_chat_llm", lambda **kw: object())
 
         service = RetrievalCheckService(pipeline=MockPipeline(), max_retries=2)
         result = await service.check_and_retrieve("python GIL")

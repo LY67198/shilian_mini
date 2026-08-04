@@ -6,6 +6,7 @@ retrieve → check → (insufficient + retry<max) rewrite → retrieve …
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -18,6 +19,12 @@ from app.retrieval import SearchResult
 from app.retrieval.pipeline import RetrievalPipeline
 
 logger = logging.getLogger(__name__)
+
+# 自检 LLM 单次调用的应用层超时（秒）。
+# 实测 DeepSeek 偶发 "200 OK 后 response body 永久不发"，且 httpx read timeout 未触发，
+# 导致 check_and_retrieve 永久挂起 → 整个 SSE 面试流无输出、前端"一直思考"。
+# 用 asyncio.wait_for 兜底，超时抛 TimeoutError → 被 check_and_retrieve 的 except 捕获走 fallback。
+_LLM_CALL_TIMEOUT_SECONDS: float = 60
 
 
 @dataclass
@@ -52,11 +59,14 @@ async def _check_sufficiency(query: str, results: list[dict]) -> tuple[bool, str
         SufficiencyResult, method="json_mode"
     )
     chain = prompt | llm
-    result: SufficiencyResult = await chain.ainvoke({
-        "query": query,
-        "result_count": str(len(results)),
-        "retrieved_content": retrieved_content,
-    })
+    result: SufficiencyResult = await asyncio.wait_for(
+        chain.ainvoke({
+            "query": query,
+            "result_count": str(len(results)),
+            "retrieved_content": retrieved_content,
+        }),
+        timeout=_LLM_CALL_TIMEOUT_SECONDS,
+    )
     return result.sufficient, result.reason
 
 
@@ -81,11 +91,14 @@ async def _rewrite_query(original_query: str, retry_reason: str, history: list[d
     prompt = load_prompt("retrieval_rewrite_query")
     llm = get_chat_llm(temperature=0.7)
     chain = prompt | llm
-    response = await chain.ainvoke({
-        "query": original_query,
-        "reason": retry_reason,
-        "retrieved_content": retrieved_content,
-    })
+    response = await asyncio.wait_for(
+        chain.ainvoke({
+            "query": original_query,
+            "reason": retry_reason,
+            "retrieved_content": retrieved_content,
+        }),
+        timeout=_LLM_CALL_TIMEOUT_SECONDS,
+    )
     return response.content.strip() if hasattr(response, "content") else str(response).strip()
 
 
