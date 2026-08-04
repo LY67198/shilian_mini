@@ -238,11 +238,21 @@ onUnmounted(() => {
 
 function onFileChange(e) {
   const f = e.target.files[0]
-  if (f && SUPPORTED_EXTS.some(ext => f.name.toLowerCase().endsWith(ext))) file.value = f
+  if (f && SUPPORTED_EXTS.some(ext => f.name.toLowerCase().endsWith(ext))) {
+    file.value = f
+    error.value = ''
+  } else if (f) {
+    error.value = '仅支持 PDF / Word (.docx) / PPT (.pptx)，老式 .doc/.ppt 请另存为新格式后上传'
+  }
 }
 function onDrop(e) {
   const f = e.dataTransfer.files[0]
-  if (f && SUPPORTED_EXTS.some(ext => f.name.toLowerCase().endsWith(ext))) file.value = f
+  if (f && SUPPORTED_EXTS.some(ext => f.name.toLowerCase().endsWith(ext))) {
+    file.value = f
+    error.value = ''
+  } else if (f) {
+    error.value = '仅支持 PDF / Word (.docx) / PPT (.pptx)，老式 .doc/.ppt 请另存为新格式后上传'
+  }
 }
 
 async function handleUpload() {
